@@ -1,0 +1,5 @@
+{
+  "name": "PolitiStream",
+  "description": "Real-time, high-signal US political news aggregator with AI-driven content governance and source tracing.",
+  "requestFramePermissions": []
+}
