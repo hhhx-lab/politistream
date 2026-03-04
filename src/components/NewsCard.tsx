@@ -36,7 +36,7 @@ export const NewsCard: React.FC<NewsCardProps> = ({ item, onSelect, selected, on
         ${selected ? 'bg-stone-200' : 'hover:bg-stone-100'}
       `}
     >
-      <div className="absolute top-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className={`absolute top-4 right-4 z-10 transition-opacity ${item.is_favorite ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
         <button
           onClick={(e) => {
             e.stopPropagation();

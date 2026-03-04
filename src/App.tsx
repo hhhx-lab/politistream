@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { NewsFeed } from './components/NewsFeed';
 import { ParsedNewsItem, FeedSource } from './types';
-import { ExternalLink, Shield, Activity, Database, Rss, Bookmark, Star } from 'lucide-react';
+import { ExternalLink, Shield, Activity, Database, Rss, Bookmark, Star, Copy, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 function App() {
   const [selectedItem, setSelectedItem] = useState<ParsedNewsItem | null>(null);
   const [feeds, setFeeds] = useState<FeedSource[]>([]);
-  const [viewMode, setViewMode] = useState<'all' | 'favorites'>('all');
+  const [viewMode, setViewMode] = useState<'all' | 'favorites' | 'warehouse'>('all');
+  const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
     fetch('/api/feeds')
@@ -16,17 +17,53 @@ function App() {
       .catch(console.error);
   }, []);
 
-  const handleToggleFavorite = async (id: number, isFavorite: boolean) => {
+  const handleAnalyzeItem = async (id: number) => {
+    setAnalyzing(true);
     try {
-      await fetch(`/api/news/${id}/favorite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isFavorite })
-      });
-      
-      // If currently viewing favorites and we unfavorite, we might want to remove it from view
-      // But NewsFeed handles its own state mostly. We'll need to trigger a refresh or update local state in NewsFeed.
-      // For now, let's just let NewsFeed handle the UI update via its own internal state update or refresh.
+      const res = await fetch(`/api/news/${id}/analyze`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.data) {
+        let entities = [];
+        try {
+            if (typeof data.data.entities === 'string') {
+                entities = JSON.parse(data.data.entities);
+            } else if (Array.isArray(data.data.entities)) {
+                entities = data.data.entities;
+            }
+        } catch (e) {}
+
+        const updatedItem = { ...data.data, entities };
+        setSelectedItem(updatedItem);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+        setAnalyzing(false);
+    }
+  };
+
+  const handleCopyContent = () => {
+    if (!selectedItem) return;
+    const text = `
+Title: ${selectedItem.title}
+Source: ${selectedItem.source}
+Date: ${selectedItem.pubDate}
+Link: ${selectedItem.link}
+
+Summary:
+${selectedItem.summary || "N/A"}
+
+Content:
+${selectedItem.contentSnippet}
+    `.trim();
+    navigator.clipboard.writeText(text);
+  };
+
+  const handleReprocessAI = async () => {
+    try {
+      const res = await fetch('/api/refresh-ai', { method: 'POST' });
+      const data = await res.json();
+      console.log(`Reprocessing complete. ${data.processedCount} items processed.`);
     } catch (e) {
       console.error(e);
     }
@@ -58,9 +95,13 @@ function App() {
                 <Bookmark size={16} />
                 <span className="text-sm">Saved Library</span>
               </div>
-              <div className="flex items-center gap-3 px-2 py-1.5 opacity-60 hover:opacity-100 cursor-pointer">
+              <div 
+                onClick={() => setViewMode('warehouse')}
+                className={`flex items-center gap-3 px-2 py-1.5 cursor-pointer rounded transition-colors ${viewMode === 'warehouse' ? 'bg-[#D4D3D0] opacity-100' : 'opacity-60 hover:opacity-100'}`}
+                title="View items needing AI analysis"
+              >
                 <Database size={16} />
-                <span className="text-sm">Data Warehouse</span>
+                <span className="text-sm">AI Work Queue</span>
               </div>
               <div className="flex items-center gap-3 px-2 py-1.5 opacity-60 hover:opacity-100 cursor-pointer">
                 <Shield size={16} />
@@ -92,6 +133,7 @@ function App() {
       {/* Main Feed */}
       <div className="w-96 border-r border-[#141414] bg-[#F5F5F4] flex flex-col flex-shrink-0">
         <NewsFeed 
+          key={viewMode}
           onSelect={setSelectedItem} 
           selectedId={selectedItem?.id}
           viewMode={viewMode}
@@ -109,18 +151,40 @@ function App() {
               exit={{ opacity: 0, y: -10 }}
               className="p-12 max-w-4xl mx-auto"
             >
-              <div className="flex items-center gap-4 mb-8 font-mono text-xs uppercase tracking-widest opacity-60">
-                <span>{selectedItem.source}</span>
-                <span>/</span>
-                <span>{(() => {
-                  try {
-                    return new Date(selectedItem.pubDate).toLocaleString();
-                  } catch (e) {
-                    return selectedItem.pubDate;
-                  }
-                })()}</span>
-                <span>/</span>
-                <span>ID: {selectedItem.id.toString().padStart(6, '0')}</span>
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-4 font-mono text-xs uppercase tracking-widest opacity-60">
+                    <span>{selectedItem.source}</span>
+                    <span>/</span>
+                    <span>{(() => {
+                    try {
+                        return new Date(selectedItem.pubDate).toLocaleString();
+                    } catch (e) {
+                        return selectedItem.pubDate;
+                    }
+                    })()}</span>
+                    <span>/</span>
+                    <span>ID: {selectedItem.id.toString().padStart(6, '0')}</span>
+                </div>
+                
+                <div className="flex gap-2">
+                    <button 
+                        onClick={handleCopyContent}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-stone-200 hover:bg-stone-300 rounded transition-colors text-stone-700 text-xs font-mono uppercase tracking-wider"
+                        title="Copy to clipboard"
+                    >
+                        <Copy size={14} />
+                        <span>Copy</span>
+                    </button>
+                    <button 
+                        onClick={() => handleAnalyzeItem(selectedItem.id)}
+                        disabled={analyzing}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-stone-800 hover:bg-stone-900 text-stone-100 rounded transition-colors text-xs font-mono uppercase tracking-wider disabled:opacity-50"
+                        title="Analyze with AI"
+                    >
+                        <Wand2 size={14} className={analyzing ? "animate-spin" : ""} />
+                        <span>{analyzing ? "Analyzing..." : "Analyze"}</span>
+                    </button>
+                </div>
               </div>
 
               <h1 className="text-5xl font-serif font-medium leading-tight mb-8">
@@ -130,20 +194,41 @@ function App() {
               <div className="grid grid-cols-3 gap-8 mb-12">
                 <div className="col-span-2">
                   <div className="prose prose-stone prose-lg">
-                    <p className="font-sans text-xl leading-relaxed text-stone-800 mb-6 whitespace-pre-line">
-                      {selectedItem.summary || selectedItem.contentSnippet}
-                    </p>
+                    {selectedItem.summary ? (
+                      <div className="mb-6">
+                        <h3 className="font-serif italic text-xl mb-2 text-stone-500">AI Executive Summary</h3>
+                        <p className="font-sans text-lg leading-relaxed text-stone-900 whitespace-pre-line">
+                          {selectedItem.summary}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mb-6 p-4 bg-stone-200/50 rounded border border-stone-300 border-dashed">
+                        <p className="text-sm font-mono text-stone-500 mb-2">AI Analysis Pending...</p>
+                        <p className="font-sans text-base leading-relaxed text-stone-700 whitespace-pre-line opacity-80">
+                          {selectedItem.contentSnippet || (
+                            <span className="italic opacity-60">
+                              No preview content available. Please check the source link for the full article.
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    )}
+                    
                     <div className="p-6 bg-stone-200 border-l-2 border-[#141414]">
                       <h4 className="font-mono text-xs uppercase mb-2 opacity-60">AI Analysis</h4>
                       <p className="text-sm font-mono">
-                        Sentiment Score: <span className={selectedItem.sentiment && selectedItem.sentiment > 0 ? 'text-emerald-700' : 'text-rose-700'}>{selectedItem.sentiment?.toFixed(3)}</span>
+                        Sentiment Score: <span className={selectedItem.sentiment && selectedItem.sentiment > 0 ? 'text-emerald-700' : 'text-rose-700'}>{selectedItem.sentiment?.toFixed(3) || '0.000'}</span>
                       </p>
-                      <div className="flex gap-2 mt-2">
-                        {selectedItem.entities?.map((e, i) => (
-                          <span key={i} className="px-2 py-1 bg-white border border-stone-300 text-xs rounded-full">
-                            {e}
-                          </span>
-                        ))}
+                      <div className="flex gap-2 mt-2 flex-wrap">
+                        {selectedItem.entities && selectedItem.entities.length > 0 ? (
+                          selectedItem.entities.map((e, i) => (
+                            <span key={i} className="px-2 py-1 bg-white border border-stone-300 text-xs rounded-full">
+                              {e}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-xs text-stone-500 italic">No entities extracted</span>
+                        )}
                       </div>
                     </div>
                   </div>
