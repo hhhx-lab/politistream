@@ -111,7 +111,42 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMo
     await fetchNews(false);
   };
 
-  // ...
+  const handleToggleFavorite = async (item: ParsedNewsItem) => {
+    const newStatus = !item.is_favorite;
+    
+    // Optimistic update
+    setNews(prev => prev.map(n => 
+      n.id === item.id ? { ...n, is_favorite: newStatus ? 1 : 0 } : n
+    ));
+
+    try {
+      await fetch(`/api/news/${item.id}/favorite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFavorite: newStatus })
+      });
+    } catch (e) {
+      console.error("Failed to toggle favorite", e);
+      // Revert on error
+      setNews(prev => prev.map(n => 
+        n.id === item.id ? { ...n, is_favorite: item.is_favorite } : n
+      ));
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    fetchNews(true);
+    
+    if (viewMode === 'all') {
+      const interval = setInterval(() => fetchNews(true), 60000); // Poll every 60s, reset to top
+      return () => clearInterval(interval);
+    }
+  }, [viewMode]);
+
+  if (loading) {
+    return <div className="p-8 font-mono text-sm text-stone-400">Initializing Uplink...</div>;
+  }
 
   let title = 'Live Wire';
   if (viewMode === 'favorites') title = 'Saved Library';

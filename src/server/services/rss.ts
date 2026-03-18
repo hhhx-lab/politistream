@@ -3,19 +3,26 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
+import puppeteer from "puppeteer";
+import http from "http";
+import https from "https";
 import { addNewsItem, updateNewsItemAnalysis, updateNewsContent, getNewsWithoutSummary, getNews } from "../db";
 import { analyzeContent } from "./ai";
 
+// Create custom agents to handle large headers from sites like Yahoo Finance
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
+
 // ... (rest of imports)
 
-export async function processMissingSummaries() {
-  console.log("Processing missing summaries...");
-  const items = getNewsWithoutSummary(20); // Process 20 at a time to avoid rate limits
+export async function processMissingSummaries(batchSize: number = 20) {
+  console.log(`Processing missing summaries (batch size: ${batchSize})...`);
+  const items = getNewsWithoutSummary(batchSize); // Process batchSize at a time to avoid rate limits
   let processedCount = 0;
 
   for (const item of items) {
-    if (item.id && item.title && item.contentSnippet) {
-      await processItemAI(item.id, item.title, item.contentSnippet, item.link);
+    if (item.id && item.title) {
+      await processItemAI(item.id, item.title, item.contentSnippet || "", item.link);
       processedCount++;
     }
   }
@@ -34,13 +41,9 @@ const parser = new Parser({
 export const FEEDS = [
   // Layer 1: Policy "Original Sources" (Most Important)
   { name: "Federal Reserve (Monetary Policy)", url: "https://www.federalreserve.gov/feeds/press_monetary.xml" },
-  { name: "White House Briefing Room", url: "https://www.whitehouse.gov/briefing-room/feed/" },
-  { name: "BLS (CPI)", url: "https://www.bls.gov/feed/news-release/cpi.rss" },
-  { name: "BEA (GDP/Economy)", url: "https://apps.bea.gov/rss/rss.xml" },
   { name: "SEC Press Releases", url: "https://www.sec.gov/news/pressreleases.rss" },
 
   // Layer 2: News Aggregators & Market News
-  { name: "CNBC Economy", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910247" },
   { name: "CNBC Finance", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664" },
   { name: "CNBC US News", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15837362" },
   { name: "CNBC World", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362" },
@@ -78,7 +81,7 @@ export const FEEDS = [
   { name: "NPR Tech", url: "https://feeds.npr.org/1019/rss.xml" }
 ];
 
-async function fetchFullContent(url: string): Promise<string> {
+async function fetchFullContentFallback(url: string): Promise<string> {
   try {
     const response = await axios.get(url, {
       headers: {
@@ -94,8 +97,14 @@ async function fetchFullContent(url: string): Promise<string> {
         "Sec-Fetch-User": "?1",
         "Cache-Control": "max-age=0"
       },
-      timeout: 10000, // Increased timeout
-      maxRedirects: 5
+      timeout: 10000,
+      maxRedirects: 5,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      // @ts-ignore: maxHeaderSize is not in AxiosRequestConfig types but works in Node.js
+      maxHeaderSize: 65536, // Increase max header size to 64KB for Yahoo Finance
+      httpAgent,
+      httpsAgent,
     });
     
     const dom = new JSDOM(response.data, { url });
@@ -103,19 +112,95 @@ async function fetchFullContent(url: string): Promise<string> {
     const article = reader.parse();
     
     if (article && article.textContent) {
-        // Clean up whitespace
         return article.textContent.replace(/\s+/g, ' ').trim();
     }
-    
     return "";
   } catch (error) {
-    if (axios.isAxiosError(error) && error.response?.status === 403) {
-        console.warn(`Access denied (403) for ${url}. Using snippet instead.`);
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.includes("Header overflow")) {
+        console.log(`Fallback fetch skipped for ${url} (Header overflow). AI will use URL context directly.`);
+    } else if (axios.isAxiosError(error) && error.response && [401, 403, 451].includes(error.response.status)) {
+        console.log(`Fallback fetch skipped for ${url} (Paywall/Auth ${error.response.status}). AI will use URL context directly.`);
     } else {
-        console.error(`Error fetching full content for ${url}:`, error instanceof Error ? error.message : String(error));
+        console.log(`Fallback fetch failed for ${url}: ${msg}`);
     }
     return "";
   }
+}
+
+async function fetchFullContent(url: string): Promise<string> {
+  // Strategy 1: Jina AI (Best for LLMs, bypasses many blocks)
+  try {
+    const jinaUrl = `https://r.jina.ai/${url}`;
+    const response = await axios.get(jinaUrl, {
+      headers: {
+        "Accept": "text/plain",
+        "X-Return-Format": "markdown"
+      },
+      timeout: 10000,
+    });
+    
+    if (response.data && typeof response.data === 'string' && response.data.length > 500) {
+        return response.data.trim();
+    }
+  } catch (error) {
+    // Jina failed, silently fall back to next strategy
+  }
+
+  // Strategy 2: AllOrigins CORS Proxy (Often bypasses IP blocks)
+  try {
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const response = await axios.get(proxyUrl, { timeout: 10000 });
+    const dom = new JSDOM(response.data, { url });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    if (article && article.textContent && article.textContent.length > 500) {
+      return article.textContent.replace(/\s+/g, ' ').trim();
+    }
+  } catch (e) {
+    // AllOrigins failed, silently fall back to next strategy
+  }
+
+  // Strategy 3: CodeTabs Proxy (Another free proxy layer)
+  try {
+    const proxyUrl = `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`;
+    const response = await axios.get(proxyUrl, { timeout: 10000 });
+    const dom = new JSDOM(response.data, { url });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    if (article && article.textContent && article.textContent.length > 500) {
+      return article.textContent.replace(/\s+/g, ' ').trim();
+    }
+  } catch (e) {
+    // CodeTabs failed, silently fall back to next strategy
+  }
+
+  // Strategy 4: Puppeteer (Headless Browser - Ultimate fallback for JS-rendered or heavily protected sites)
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
+    const content = await page.content();
+    
+    const dom = new JSDOM(content, { url });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    if (article && article.textContent && article.textContent.length > 500) {
+      return article.textContent.replace(/\s+/g, ' ').trim();
+    }
+  } catch (e) {
+    // Puppeteer failed, silently fall back to next strategy
+  } finally {
+    if (browser) {
+      await browser.close().catch(console.error);
+    }
+  }
+
+  // Strategy 5: Direct Axios with spoofed headers (Last resort)
+  return await fetchFullContentFallback(url);
 }
 
 export async function fetchAndProcessFeeds() {
@@ -177,7 +262,7 @@ export async function fetchAndProcessFeeds() {
             newItemsCount++;
             // Trigger AI analysis for the new item with the full content
             // Run in background, don't await
-            processItemAI(Number(addedId), item.title, content, item.link).catch(e => console.error(e));
+            // processItemAI(Number(addedId), item.title, content, item.link).catch(e => console.error(e));
           }
         }
       } catch (error) {
@@ -187,6 +272,10 @@ export async function fetchAndProcessFeeds() {
   }
   
   console.log(`Fetch complete. Added ${newItemsCount} new items.`);
+  
+  // Process a small batch of missing summaries in the background
+  processMissingSummaries(5).catch(console.error);
+  
   return newItemsCount;
 }
 
@@ -206,7 +295,7 @@ export async function analyzeSingleItem(id: number) {
   }
 
   const truncatedSnippet = fullContent.length > 20000 ? fullContent.substring(0, 20000) + "..." : fullContent;
-  const analysis = await analyzeContent(item.title, truncatedSnippet);
+  const analysis = await analyzeContent(item.title, truncatedSnippet, item.link);
   
   // Update DB
   updateNewsItemAnalysis(id, analysis.summary, analysis.sentiment, analysis.entities);
@@ -239,7 +328,7 @@ async function processItemAI(id: number, title: string, snippet: string, link?: 
 
         // Truncate snippet if too long to avoid token limits, but keep enough context
         const truncatedSnippet = fullContent.length > 20000 ? fullContent.substring(0, 20000) + "..." : fullContent;
-        const analysis = await analyzeContent(title, truncatedSnippet);
+        const analysis = await analyzeContent(title, truncatedSnippet, link);
         updateNewsItemAnalysis(id, analysis.summary, analysis.sentiment, analysis.entities);
     } catch (e) {
         console.error("AI Analysis failed for", title, e);

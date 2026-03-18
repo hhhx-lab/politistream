@@ -1,8 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import { initDb, getNews, addNewsItem, toggleFavorite, getFavorites } from "./src/server/db";
-import { fetchAndProcessFeeds, FEEDS, processMissingSummaries } from "./src/server/services/rss";
+import { initDb, getNews, addNewsItem, toggleFavorite, getFavorites, getNewsWithoutSummary } from "./src/server/db";
+import { fetchAndProcessFeeds, FEEDS, processMissingSummaries, analyzeSingleItem } from "./src/server/services/rss";
 
 // ... (rest of imports)
 
@@ -16,8 +16,9 @@ initDb();
 
 app.post("/api/refresh-ai", async (req, res) => {
   try {
-    console.log("Triggering AI re-analysis...");
-    const count = await processMissingSummaries();
+    const batchSize = parseInt(req.query.batchSize as string) || 20;
+    console.log(`Triggering AI re-analysis with batch size ${batchSize}...`);
+    const count = await processMissingSummaries(batchSize);
     res.json({ success: true, processedCount: count });
   } catch (error) {
     console.error("Error reprocessing AI summaries:", error);
@@ -76,24 +77,12 @@ app.post("/api/news/:id/analyze", async (req, res) => {
       return res.status(404).json({ error: "Item not found" });
     }
 
-    // If content is short/empty, try to fetch full content first
-    let content = item.contentSnippet;
-    if ((!content || content.length < 500) && item.link) {
-      const { fetchFullContent } = require("./src/server/services/rss"); // Lazy load to avoid circular dep issues if any
-      // We need to export fetchFullContent or move it. 
-      // Actually, processItemAI handles fetching. Let's use processItemAI directly if possible, 
-      // but processItemAI is void/background. We want to await it and return result.
-      // Let's refactor rss.ts to export a analyzeItem function that returns the result.
-    }
-
-    // Better approach: Call a service function that does the work and returns the result
-    const { analyzeSingleItem } = require("./src/server/services/rss");
     const result = await analyzeSingleItem(Number(id));
     
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Error analyzing item:", error);
-    res.status(500).json({ error: "Failed to analyze item" });
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to analyze item" });
   }
 });
 

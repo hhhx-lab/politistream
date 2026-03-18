@@ -21,6 +21,18 @@ function App() {
     setAnalyzing(true);
     try {
       const res = await fetch(`/api/news/${id}/analyze`, { method: 'POST' });
+      
+      if (!res.ok) {
+          let errorText = `HTTP ${res.status}`;
+          try {
+              const errData = await res.json();
+              errorText = errData.error || errorText;
+          } catch (e) {
+              errorText = await res.text();
+          }
+          throw new Error(errorText);
+      }
+
       const data = await res.json();
       if (data.success && data.data) {
         let entities = [];
@@ -34,9 +46,23 @@ function App() {
 
         const updatedItem = { ...data.data, entities };
         setSelectedItem(updatedItem);
+      } else {
+        // If API returns success: false or error
+        setSelectedItem(prev => prev ? {
+            ...prev,
+            summary: `API Error: ${data.error || "Failed to analyze item"}`,
+            sentiment: 0,
+            entities: []
+        } : null);
       }
     } catch (e) {
       console.error(e);
+      setSelectedItem(prev => prev ? {
+          ...prev,
+          summary: `Network Error: ${e instanceof Error ? e.message : String(e)}`,
+          sentiment: 0,
+          entities: []
+      } : null);
     } finally {
         setAnalyzing(false);
     }
