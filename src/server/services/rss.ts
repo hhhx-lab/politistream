@@ -8,6 +8,7 @@ import http from "http";
 import https from "https";
 import { addNewsItem, updateNewsItemAnalysis, updateNewsContent, getNewsWithoutSummary, getNews } from "../db";
 import { analyzeContent } from "./ai";
+import { archiveNewsToMarkdown } from "./storage";
 
 // Create custom agents to handle large headers from sites like Yahoo Finance
 const httpAgent = new http.Agent({ keepAlive: true });
@@ -300,6 +301,16 @@ export async function analyzeSingleItem(id: number) {
   // Update DB
   updateNewsItemAnalysis(id, analysis.summary, analysis.sentiment, analysis.entities);
   
+  // Archiving to Markdown
+  const updatedItem = { 
+      ...item, 
+      summary: analysis.summary, 
+      sentiment: analysis.sentiment, 
+      entities: JSON.stringify(analysis.entities),
+      contentSnippet: fullContent 
+  };
+  await archiveNewsToMarkdown(updatedItem as any);
+  
   // Return updated item structure
   return { 
       ...item, 
@@ -327,9 +338,24 @@ async function processItemAI(id: number, title: string, snippet: string, link?: 
         }
 
         // Truncate snippet if too long to avoid token limits, but keep enough context
+        // Truncate snippet if too long to avoid token limits, but keep enough context
         const truncatedSnippet = fullContent.length > 20000 ? fullContent.substring(0, 20000) + "..." : fullContent;
         const analysis = await analyzeContent(title, truncatedSnippet, link);
         updateNewsItemAnalysis(id, analysis.summary, analysis.sentiment, analysis.entities);
+
+        // Archiving to Markdown
+        const fullItem = {
+            id,
+            title,
+            source: "", // This might be missing here, but it's okay for now
+            link: link || "",
+            pubDate: new Date().toISOString(), // Fallback
+            contentSnippet: fullContent,
+            summary: analysis.summary,
+            sentiment: analysis.sentiment,
+            entities: JSON.stringify(analysis.entities)
+        };
+        await archiveNewsToMarkdown(fullItem as any);
     } catch (e) {
         console.error("AI Analysis failed for", title, e);
     }

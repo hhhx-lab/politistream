@@ -25,31 +25,37 @@ export async function analyzeContent(title: string, snippet: string, url?: strin
   }
 
   try {
-    let prompt = `You are a neutral, objective political analyst. 
-    Analyze the following news item. 
-    1. Provide a structured summary. Start with a concise paragraph describing the main event (approx 30 words). Then, provide 2-3 bullet points highlighting key implications or details.
-    2. Determine the sentiment score from -1.0 (negative) to 1.0 (positive).
-    3. Extract key political entities (people, organizations, countries).
+    let prompt = `你是一位享誉全球的资深政治评论员与数据分析专家。
+    请对以下新闻内容进行深度分析与提炼。
+
+    你的任务：
+    1. **深度摘要 (Structured Summary)**: 
+       - 第一部分：用一段约 80-120 字的文字，精准概括该事件的核心事实及其在全球或区域政治版图中的位置。
+       - 第二部分：提供 3-4 个深度洞察点（Bullet Points），分析该事件的潜在影响、多方博弈细节或未来发展趋势。
+    2. **情感量化 (Sentiment)**: 判定该新闻的政治情感倾向，分值范围：-1.0（极端负面/对抗）到 1.0（极端正面/合作）。
+    3. **关键实体提取 (Entities)**: 识别并提取新闻中涉及的所有关键政治人物、政党、政府机构及国际组织。
+
+    **语言要求**: 必须全部使用 **简体中文** 输出。
     
-    Title: ${title}
-    Snippet: ${snippet}`;
+    待分析内容：
+    标题: ${title}
+    正文片段: ${snippet}`;
 
     if (url) {
-      prompt += `\n\nAdditional Context URL: ${url}\nPlease read the content from this URL to provide a complete analysis if the snippet is insufficient.`;
+      prompt += `\n\n参考来源 URL: ${url}\n如果上述片段信息不足，请优先阅读并理解该 URL 中的完整内容。`;
     }
 
     const config: any = {};
 
     if (url) {
-      config.tools = [{ urlContext: {} }, { googleSearch: {} }];
-      prompt += `\n\nIMPORTANT: You MUST return ONLY valid JSON. Do not include markdown formatting like \`\`\`json. The JSON must match this structure exactly:
+      config.tools = [{ urlContext: {} }];
+      prompt += `\n\n**重要指令**: 你必须仅返回合法的 JSON 对象。严禁包含 markdown 代码块标记或任何多余文字。JSON 结构必须严格如下：
       {
-        "summary": "Concise paragraph describing main event, followed by 2-3 bullet points.",
+        "summary": "此处为深度摘要内容...",
         "sentiment": 0.5,
-        "entities": ["Entity1", "Entity2"]
+        "entities": ["实体1", "实体2"]
       }
-      If you cannot access the URL directly, use Google Search to find information about the article title to write the summary.
-      If you STILL cannot find any information, you MUST STILL return valid JSON with a generic summary based on the title, e.g., {"summary": "Based on the title, this article discusses...", "sentiment": 0, "entities": []}. NEVER return plain text.`;
+      如果无法直接访问 URL，请根据标题和片段进行逻辑推断生成摘要。切勿返回空值。`;
     } else {
       config.responseMimeType = "application/json";
       config.responseSchema = {
@@ -67,13 +73,13 @@ export async function analyzeContent(title: string, snippet: string, url?: strin
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config
     });
 
     const responseText = response.text;
-    if (!responseText) throw new Error("Empty response from Gemini");
+    if (!responseText) throw new Error("Empty response from AI");
     
     // Try to extract JSON if it's wrapped in markdown or has extra text
     let cleanText = responseText;
@@ -85,7 +91,7 @@ export async function analyzeContent(title: string, snippet: string, url?: strin
     try {
         const parsed = JSON.parse(cleanText) as AnalysisResult;
         if (!parsed.summary || parsed.summary.trim() === "") {
-            parsed.summary = "AI could not generate a summary for this article. It may be behind a strict paywall or lack sufficient content.";
+            parsed.summary = "AI 暂时无法为此文章生成有效摘要，可能受限于网页加密或内容长度。";
         }
         if (!parsed.entities || !Array.isArray(parsed.entities)) {
             parsed.entities = [];
@@ -95,13 +101,13 @@ export async function analyzeContent(title: string, snippet: string, url?: strin
         }
         return parsed;
     } catch (parseError) {
-        console.error("Failed to parse JSON from Gemini. Raw response:", responseText);
-        throw parseError; // Re-throw to be caught by outer catch block
+        console.error("Failed to parse JSON from AI. Raw response:", responseText);
+        throw parseError;
     }
 
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error("Gemini Analysis Error:", errorMsg);
+    console.error("AI Analysis Error:", errorMsg);
     return {
         summary: `AI Analysis failed: ${errorMsg}\n\nThis usually happens if the article is behind a strict paywall, blocks AI crawlers, or triggers safety filters.`,
         sentiment: 0,

@@ -8,7 +8,7 @@ PolitiStream is a high-performance, real-time news aggregation platform focused 
 ### 2.1. Core Stack
 - **Frontend**: React 19, Tailwind CSS v4, Motion (Framer Motion).
 - **Backend**: Node.js (Express), SQLite (better-sqlite3) for high-performance local storage.
-- **AI Engine**: Google Gemini 2.5 Flash for real-time NLP (summarization, sentiment analysis, entity extraction).
+- **AI Engine**: Gemini 2.5 Flash for real-time NLP (summarization, sentiment analysis, entity extraction).
 - **Data Pipeline**: Custom RSS/Webhook ingestion engine.
 
 ### 2.2. Data Flow Topology
