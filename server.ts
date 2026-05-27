@@ -1,8 +1,22 @@
 import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import { initDb, getNews, addNewsItem, toggleFavorite, getFavorites, getNewsWithoutSummary } from "./src/server/db";
-import { fetchAndProcessFeeds, FEEDS, processMissingSummaries, analyzeSingleItem } from "./src/server/services/rss";
+import {
+  addRSSSource,
+  getFavorites,
+  getNews,
+  getNewsWithoutSummary,
+  initDb,
+  setRSSSourceEnabled,
+  toggleFavorite,
+} from "./src/server/db";
+import {
+  analyzeSingleItem,
+  fetchAndProcessFeeds,
+  getRSSSources,
+  processMissingSummaries,
+  refreshRSSSource,
+} from "./src/server/services/rss";
 import { sendResearchConfigStatus } from "./src/server/research/http";
 import { createResearchRouter } from "./src/server/research/routes";
 
@@ -36,8 +50,67 @@ app.get("/api/health", (req, res) => {
 app.get("/api/research/status", sendResearchConfigStatus);
 app.use("/api/research", createResearchRouter());
 
+function sendRSSSourceError(res: express.Response, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "rss_source_url_exists") {
+    return res.status(409).json({ error: message });
+  }
+  if (message === "rss_source_not_found") {
+    return res.status(404).json({ error: message });
+  }
+  if ([
+    "invalid_rss_source_url",
+    "rss_source_name_required",
+    "rss_source_disabled",
+  ].includes(message)) {
+    return res.status(400).json({ error: message });
+  }
+  console.error("RSS source API error:", error);
+  return res.status(500).json({ error: "rss_source_request_failed" });
+}
+
 app.get("/api/feeds", (req, res) => {
-  res.json(FEEDS);
+  try {
+    res.json(getRSSSources());
+  } catch (error) {
+    sendRSSSourceError(res, error);
+  }
+});
+
+app.post("/api/feeds", (req, res) => {
+  try {
+    const source = addRSSSource({
+      name: String(req.body.name ?? ""),
+      url: String(req.body.url ?? ""),
+    });
+    res.status(201).json(source);
+  } catch (error) {
+    sendRSSSourceError(res, error);
+  }
+});
+
+app.patch("/api/feeds/:id", (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "invalid_rss_source_id" });
+    const enabled = Boolean(req.body.enabled);
+    const source = setRSSSourceEnabled(id, enabled);
+    if (!source) return res.status(404).json({ error: "rss_source_not_found" });
+    res.json(source);
+  } catch (error) {
+    sendRSSSourceError(res, error);
+  }
+});
+
+app.post("/api/feeds/:id/refresh", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "invalid_rss_source_id" });
+    const result = await refreshRSSSource(id);
+    res.status(result.success ? 200 : 502).json(result);
+  } catch (error) {
+    sendRSSSourceError(res, error);
+  }
 });
 
 app.get("/api/news", (req, res) => {
