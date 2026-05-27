@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { NewsFeed } from './components/NewsFeed';
+import { ResearchPanel } from './components/ResearchPanel';
 import { ParsedNewsItem, FeedSource } from './types';
-import { ExternalLink, Shield, Activity, Database, Rss, Bookmark, Star, Copy, Wand2 } from 'lucide-react';
+import { ExternalLink, Shield, Activity, Database, Rss, Bookmark, Star, Copy, Wand2, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 function App() {
   const [selectedItem, setSelectedItem] = useState<ParsedNewsItem | null>(null);
   const [feeds, setFeeds] = useState<FeedSource[]>([]);
   const [viewMode, setViewMode] = useState<'all' | 'favorites' | 'warehouse'>('all');
+  const [workspace, setWorkspace] = useState<'news' | 'research'>('news');
   const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
@@ -108,21 +110,21 @@ ${selectedItem.contentSnippet}
             <h3 className="text-xs font-mono uppercase tracking-widest opacity-50 mb-4 px-2">System Status</h3>
             <div className="space-y-2">
               <div 
-                onClick={() => setViewMode('all')}
+                onClick={() => { setWorkspace('news'); setViewMode('all'); }}
                 className={`flex items-center gap-3 px-2 py-1.5 cursor-pointer rounded transition-colors ${viewMode === 'all' ? 'bg-[#D4D3D0] opacity-100' : 'opacity-60 hover:opacity-100'}`}
               >
                 <Activity size={16} />
                 <span className="text-sm">Live Monitoring</span>
               </div>
               <div 
-                onClick={() => setViewMode('favorites')}
+                onClick={() => { setWorkspace('news'); setViewMode('favorites'); }}
                 className={`flex items-center gap-3 px-2 py-1.5 cursor-pointer rounded transition-colors ${viewMode === 'favorites' ? 'bg-[#D4D3D0] opacity-100' : 'opacity-60 hover:opacity-100'}`}
               >
                 <Bookmark size={16} />
                 <span className="text-sm">Saved Library</span>
               </div>
               <div 
-                onClick={() => setViewMode('warehouse')}
+                onClick={() => { setWorkspace('news'); setViewMode('warehouse'); }}
                 className={`flex items-center gap-3 px-2 py-1.5 cursor-pointer rounded transition-colors ${viewMode === 'warehouse' ? 'bg-[#D4D3D0] opacity-100' : 'opacity-60 hover:opacity-100'}`}
                 title="View items needing AI analysis"
               >
@@ -132,6 +134,13 @@ ${selectedItem.contentSnippet}
               <div className="flex items-center gap-3 px-2 py-1.5 opacity-60 hover:opacity-100 cursor-pointer">
                 <Shield size={16} />
                 <span className="text-sm">Governance</span>
+              </div>
+              <div
+                onClick={() => setWorkspace('research')}
+                className={`flex items-center gap-3 px-2 py-1.5 cursor-pointer rounded transition-colors ${workspace === 'research' ? 'bg-[#D4D3D0] opacity-100' : 'opacity-60 hover:opacity-100'}`}
+              >
+                <Search size={16} />
+                <span className="text-sm">Research</span>
               </div>
             </div>
           </div>
@@ -156,18 +165,24 @@ ${selectedItem.contentSnippet}
         </div>
       </div>
 
-      {/* Main Feed */}
-      <div className="w-96 border-r border-[#141414] bg-[#F5F5F4] flex flex-col flex-shrink-0">
-        <NewsFeed 
-          key={viewMode}
-          onSelect={setSelectedItem} 
-          selectedId={selectedItem?.id}
-          viewMode={viewMode}
-        />
-      </div>
+      {workspace === 'research' ? (
+        <div className="flex-1 min-w-0">
+          <ResearchPanel />
+        </div>
+      ) : (
+        <>
+          {/* Main Feed */}
+          <div className="w-96 border-r border-[#141414] bg-[#F5F5F4] flex flex-col flex-shrink-0">
+            <NewsFeed 
+              key={viewMode}
+              onSelect={setSelectedItem} 
+              selectedId={selectedItem?.id}
+              viewMode={viewMode}
+            />
+          </div>
 
-      {/* Detail View */}
-      <div className="flex-1 bg-[#E4E3E0] relative overflow-y-auto">
+          {/* Detail View */}
+          <div className="flex-1 bg-[#E4E3E0] relative overflow-y-auto">
         <AnimatePresence mode="wait">
           {selectedItem ? (
             <motion.div 
@@ -288,7 +303,9 @@ ${selectedItem.contentSnippet}
             </div>
           )}
         </AnimatePresence>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
