@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import { initDb, getNews, addNewsItem, toggleFavorite, getFavorites, getNewsWithoutSummary } from "./src/server/db";
 import { fetchAndProcessFeeds, FEEDS, processMissingSummaries, analyzeSingleItem } from "./src/server/services/rss";
 import { sendResearchConfigStatus } from "./src/server/research/http";
+import { createResearchRouter } from "./src/server/research/routes";
 
 // ... (rest of imports)
 
@@ -33,6 +34,7 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/api/research/status", sendResearchConfigStatus);
+app.use("/api/research", createResearchRouter());
 
 app.get("/api/feeds", (req, res) => {
   res.json(FEEDS);
