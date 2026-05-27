@@ -1,4 +1,5 @@
 import assert from "assert";
+import { normalizeRSSSourceUrl } from "../db";
 import { normalizeResearchBudget, createRunBudgetState, canAcceptUrlForRun, recordAcceptedUrl } from "./budget";
 import { generateMarkdownReport } from "./reports";
 import { normalizeBraveResults, normalizeSerpApiResults, normalizeTavilyResults } from "./searchProviders";
@@ -50,11 +51,32 @@ function testReportGeneration() {
   assert.equal(report.status, "ready");
   assert.ok(report.markdown.includes("AI chip export controls"));
   assert.ok(report.markdown.includes("https://example.com/report"));
+
+  const notReady = generateMarkdownReport({
+    id: "job-empty",
+    topic: "No evidence topic",
+    seedUrls: [],
+    status: "active",
+    budget: normalizeResearchBudget(),
+    queryPlan: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }, []);
+
+  assert.equal(notReady.status, "not_ready");
+  assert.equal(notReady.markdown, "");
+}
+
+function testRSSSourceUrlValidation() {
+  assert.equal(normalizeRSSSourceUrl(" https://example.com/feed.xml "), "https://example.com/feed.xml");
+  assert.throws(() => normalizeRSSSourceUrl("ftp://example.com/feed.xml"), /invalid_rss_source_url/);
+  assert.throws(() => normalizeRSSSourceUrl("not-a-url"), /invalid_rss_source_url/);
 }
 
 testUrlCanonicalization();
 testBudgetLimits();
 testProviderNormalization();
 testReportGeneration();
+testRSSSourceUrlValidation();
 
 console.log("research tests passed");
