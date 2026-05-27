@@ -6,7 +6,18 @@ import { JSDOM } from "jsdom";
 import puppeteer from "puppeteer";
 import http from "http";
 import https from "https";
-import { addNewsItem, updateNewsItemAnalysis, updateNewsContent, getNewsWithoutSummary, getNews } from "../db";
+import {
+  addNewsItem,
+  getNews,
+  getNewsWithoutSummary,
+  getRSSSourceById,
+  listRSSSources,
+  seedRSSSources,
+  updateNewsContent,
+  updateNewsItemAnalysis,
+  updateRSSSourceRefreshState,
+} from "../db";
+import type { RSSSource } from "../db";
 import { analyzeContent } from "./ai";
 import { archiveNewsToMarkdown } from "./storage";
 
@@ -81,6 +92,23 @@ export const FEEDS = [
   { name: "NPR Business", url: "https://feeds.npr.org/1006/rss.xml" },
   { name: "NPR Tech", url: "https://feeds.npr.org/1019/rss.xml" }
 ];
+
+export interface FeedRefreshResult {
+  source: RSSSource;
+  success: boolean;
+  newItems: number;
+  fetchedAt?: string;
+  error?: string;
+}
+
+export function ensureDefaultRSSSources() {
+  return seedRSSSources(FEEDS);
+}
+
+export function getRSSSources(includeDisabled = true) {
+  ensureDefaultRSSSources();
+  return listRSSSources(includeDisabled);
+}
 
 async function fetchFullContentFallback(url: string): Promise<string> {
   try {
@@ -204,80 +232,91 @@ async function fetchFullContent(url: string): Promise<string> {
   return await fetchFullContentFallback(url);
 }
 
-export async function fetchAndProcessFeeds() {
-  let newItemsCount = 0;
-  console.log("Starting feed fetch...");
+async function processFeedSource(feedSource: RSSSource): Promise<FeedRefreshResult> {
+  let newItems = 0;
+  const fetchedAt = new Date().toISOString();
 
-  // Process feeds in batches to avoid overwhelming the network/server
-  const BATCH_SIZE = 5;
-  for (let i = 0; i < FEEDS.length; i += BATCH_SIZE) {
-    const batch = FEEDS.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(async (feedSource) => {
-      try {
-        console.log(`Fetching ${feedSource.name}...`);
-        const feed = await parser.parseURL(feedSource.url);
-        
-        for (const item of feed.items) {
-          if (!item.title || !item.link) continue;
+  try {
+    console.log(`Fetching ${feedSource.name}...`);
+    const feed = await parser.parseURL(feedSource.url);
 
-          let content = item.contentSnippet || item.content || "";
-          
-          // If content is short, try to fetch full article
-          // Only fetch full content if we haven't seen this link before (optimization)
-          // Since we can't easily check existence before fetching full content without DB query,
-          // we'll rely on the fact that addNewsItem ignores duplicates.
-          // However, fetching full content is expensive, so we should ideally check first.
-          // For now, we'll keep the logic but reduce timeout in fetchFullContent if needed.
-          
-          if (content.length < 500) {
-              // console.log(`Content short for ${item.title}, fetching full article...`);
-              // Skip full content fetch for now to speed up initial load, or make it very fast/optional
-              // const fullContent = await fetchFullContent(item.link);
-              // if (fullContent.length > content.length) {
-              //     content = fullContent;
-              // }
-          }
+    for (const item of feed.items) {
+      if (!item.title || !item.link) continue;
 
-          let isoDate = new Date().toISOString();
-          if (item.isoDate) {
-              isoDate = item.isoDate;
-          } else if (item.pubDate) {
-              const parsed = new Date(item.pubDate);
-              if (!isNaN(parsed.getTime())) {
-                  isoDate = parsed.toISOString();
-              }
-          }
+      const content = item.contentSnippet || item.content || "";
 
-          const addedId = addNewsItem({
-            title: item.title,
-            link: item.link,
-            source: feedSource.name,
-            pubDate: isoDate,
-            contentSnippet: content, // Store the fuller content
-            summary: "",
-            sentiment: 0,
-            entities: "[]"
-          });
-
-          if (addedId) {
-            newItemsCount++;
-            // Trigger AI analysis for the new item with the full content
-            // Run in background, don't await
-            // processItemAI(Number(addedId), item.title, content, item.link).catch(e => console.error(e));
-          }
+      let isoDate = new Date().toISOString();
+      if (item.isoDate) {
+        isoDate = item.isoDate;
+      } else if (item.pubDate) {
+        const parsed = new Date(item.pubDate);
+        if (!isNaN(parsed.getTime())) {
+          isoDate = parsed.toISOString();
         }
-      } catch (error) {
-        console.error(`Error fetching ${feedSource.name}:`, error instanceof Error ? error.message : String(error));
       }
-    }));
+
+      const addedId = addNewsItem({
+        title: item.title,
+        link: item.link,
+        source: feedSource.name,
+        pubDate: isoDate,
+        contentSnippet: content,
+        summary: "",
+        sentiment: 0,
+        entities: "[]",
+      });
+
+      if (addedId) {
+        newItems++;
+      }
+    }
+
+    const updatedSource = updateRSSSourceRefreshState(feedSource.id, { fetchedAt, error: null }) ?? feedSource;
+    return { source: updatedSource, success: true, newItems, fetchedAt };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error fetching ${feedSource.name}:`, message);
+    const updatedSource = updateRSSSourceRefreshState(feedSource.id, { error: message }) ?? feedSource;
+    return { source: updatedSource, success: false, newItems: 0, error: message };
   }
-  
-  console.log(`Fetch complete. Added ${newItemsCount} new items.`);
-  
+}
+
+export async function refreshRSSSource(sourceId: number) {
+  ensureDefaultRSSSources();
+  const source = getRSSSourceById(sourceId);
+  if (!source) {
+    throw new Error("rss_source_not_found");
+  }
+  if (!source.enabled) {
+    throw new Error("rss_source_disabled");
+  }
+  return processFeedSource(source);
+}
+
+export async function refreshEnabledRSSSources() {
+  ensureDefaultRSSSources();
+  const sources = listRSSSources(false);
+  const results: FeedRefreshResult[] = [];
+
+  console.log("Starting feed fetch...");
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < sources.length; i += BATCH_SIZE) {
+    const batch = sources.slice(i, i + BATCH_SIZE);
+    results.push(...await Promise.all(batch.map(processFeedSource)));
+  }
+
+  const newItems = results.reduce((sum, result) => sum + result.newItems, 0);
+  console.log(`Fetch complete. Added ${newItems} new items.`);
+  return { newItems, results };
+}
+
+export async function fetchAndProcessFeeds() {
+  const { newItems } = await refreshEnabledRSSSources();
+
   // Process a small batch of missing summaries in the background
   processMissingSummaries(5).catch(console.error);
-  
-  return newItemsCount;
+
+  return newItems;
 }
 
 export async function analyzeSingleItem(id: number) {
