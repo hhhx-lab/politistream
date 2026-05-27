@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Activity,
   Bookmark,
   Copy,
   Database,
@@ -12,6 +11,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { NewsFeed } from './components/NewsFeed';
+import { RSSSourceManager } from './components/RSSSourceManager';
 import { ResearchPanel } from './components/ResearchPanel';
 import { FeedSource, ParsedNewsItem, ResearchJobSummary, ResearchRunResponse } from './types';
 
@@ -27,6 +27,7 @@ function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [newsRefreshToken, setNewsRefreshToken] = useState(0);
 
   const loadFeeds = async () => {
     try {
@@ -212,9 +213,18 @@ ${selectedItem.contentSnippet}
 
         {workspace === 'news' && (
           <div className="h-full flex min-w-0">
+            {viewMode === 'all' && (
+              <div className="w-80 flex-shrink-0">
+                <RSSSourceManager
+                  sources={feeds}
+                  onSourcesChange={setFeeds}
+                  onRefreshComplete={() => setNewsRefreshToken((value) => value + 1)}
+                />
+              </div>
+            )}
             <div className="w-96 border-r border-[#141414] bg-[#F5F5F4] flex flex-col flex-shrink-0">
               <NewsFeed
-                key={viewMode}
+                key={`${viewMode}-${newsRefreshToken}`}
                 onSelect={setSelectedItem}
                 selectedId={selectedItem?.id}
                 viewMode={viewMode}
