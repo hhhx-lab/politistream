@@ -17,8 +17,23 @@ export interface ParsedNewsItem extends Omit<NewsItem, 'entities'> {
 }
 
 export interface FeedSource {
+  id: number;
   name: string;
   url: string;
+  enabled: number;
+  is_default?: number;
+  last_fetched_at?: string | null;
+  last_error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface FeedRefreshResult {
+  source: FeedSource;
+  success: boolean;
+  newItems: number;
+  fetchedAt?: string;
+  error?: string;
 }
 
 export interface ResearchBudget {
@@ -44,10 +59,13 @@ export interface ResearchDocumentSummary {
   id: string;
   jobId: string;
   url: string;
+  finalUrl?: string;
   title?: string;
   domain: string;
   relevanceScore?: number;
   status: string;
+  error?: string;
+  fetchedAt?: string;
 }
 
 export interface ResearchReportSummary {
@@ -55,4 +73,27 @@ export interface ResearchReportSummary {
   status: 'not_ready' | 'ready' | 'failed';
   markdown: string;
   generatedAt?: string;
+}
+
+export interface SearchProviderRunResult {
+  provider: 'brave' | 'serpapi' | 'tavily';
+  enabled: boolean;
+  candidates: unknown[];
+  error?: string;
+}
+
+export interface ResearchRunResponse {
+  success: boolean;
+  queued?: boolean;
+  job: ResearchJobSummary;
+  providerResults: SearchProviderRunResult[];
+  candidateCount: number;
+  documentCount: number;
+  evidenceCount: number;
+  report: ResearchReportSummary;
+  message?: string;
+}
+
+export interface ResearchDocumentsResponse {
+  documents: ResearchDocumentSummary[];
 }
