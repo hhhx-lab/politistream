@@ -165,6 +165,14 @@ export async function updateResearchJobStatus(id: string, status: ResearchJob["s
   return result.rows[0] ? mapResearchJob(result.rows[0]) : null;
 }
 
+export async function updateResearchJobQueryPlan(id: string, queryPlan: string[]): Promise<ResearchJob | null> {
+  const result = await getPool().query(
+    "UPDATE research_jobs SET query_plan = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+    [id, JSON.stringify(queryPlan)],
+  );
+  return result.rows[0] ? mapResearchJob(result.rows[0]) : null;
+}
+
 export async function upsertSearchCandidate(candidate: SearchCandidate): Promise<SearchCandidate> {
   const id = candidate.id ?? randomUUID();
   const result = await getPool().query(
@@ -271,6 +279,14 @@ export async function getLatestResearchReport(jobId: string): Promise<ResearchRe
     [jobId],
   );
   return result.rows[0] ? mapResearchReport(result.rows[0]) : null;
+}
+
+export async function listCrawlDocumentsForJob(jobId: string): Promise<CrawlDocument[]> {
+  const result = await getPool().query(
+    "SELECT * FROM crawl_documents WHERE job_id = $1 ORDER BY created_at DESC",
+    [jobId],
+  );
+  return result.rows.map(mapCrawlDocument);
 }
 
 function mapResearchJob(row: any): ResearchJob {
