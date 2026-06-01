@@ -4,12 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "sh -c 'npm run dev:backend & backend=$!; npm run dev:frontend; kill $backend 2>/dev/null'",
+    "dev:backend": "tsx server.ts",
+    "dev:frontend": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test:research": "tsx src/server/research/research.test.ts"
+    "test": "npm run test:runtime && npm run test:research && npm run test:i18n",
+    "test:runtime": "tsx src/server/runtime.test.ts",
+    "test:research": "tsx src/server/research/research.test.ts",
+    "test:research-platform": "tsx src/server/research/platform.test.ts",
+    "test:i18n": "tsx src/i18n.test.ts",
+    "benchmark:research": "tsx src/server/research/evaluation/benchmarkRunner.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -28,6 +35,7 @@
     "jsdom": "^28.1.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.21.0",
     "puppeteer": "^24.39.1",
     "react": "^19.0.0",

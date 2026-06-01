@@ -2,14 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { ParsedNewsItem } from '../types';
 import { NewsCard } from './NewsCard';
 import { RefreshCw } from 'lucide-react';
+import { Language, Translator } from '../i18n';
 
 interface NewsFeedProps {
   onSelect: (item: ParsedNewsItem) => void;
   selectedId?: number;
   viewMode: 'all' | 'favorites' | 'warehouse';
+  language: Language;
+  t: Translator;
 }
 
-export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMode }) => {
+export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMode, language, t }) => {
   const [news, setNews] = useState<ParsedNewsItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -145,12 +148,12 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMo
   }, [viewMode]);
 
   if (loading) {
-    return <div className="p-8 font-mono text-sm text-stone-400">Initializing Uplink...</div>;
+    return <div className="p-8 font-mono text-sm text-stone-400">{t('news.loading')}</div>;
   }
 
-  let title = 'Live Wire';
-  if (viewMode === 'favorites') title = 'Saved Library';
-  if (viewMode === 'warehouse') title = 'AI Work Queue';
+  let title = t('news.liveWire');
+  if (viewMode === 'favorites') title = t('news.savedLibrary');
+  if (viewMode === 'warehouse') title = t('news.aiWorkQueue');
 
   return (
     <div className="h-full flex flex-col">
@@ -162,7 +165,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMo
           onClick={handleRefresh}
           disabled={refreshing}
           className="p-2 hover:bg-stone-200 rounded-full transition-colors disabled:opacity-50"
-          title={viewMode === 'warehouse' ? "Run Batch Processing" : "Refresh Feed"}
+          title={viewMode === 'warehouse' ? t('news.runBatchProcessing') : t('news.refreshFeed')}
         >
           <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
         </button>
@@ -170,8 +173,8 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMo
       <div className="overflow-y-auto flex-1">
         {news.length === 0 ? (
           <div className="p-8 text-center text-stone-400 font-mono text-sm">
-            {viewMode === 'favorites' ? 'No saved items found.' : 
-             viewMode === 'warehouse' ? 'No pending items. All clear!' : 'No news items found.'}
+            {viewMode === 'favorites' ? t('news.noSaved') :
+             viewMode === 'warehouse' ? t('news.noPending') : t('news.noNews')}
           </div>
         ) : (
           <>
@@ -182,6 +185,8 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMo
                 onSelect={onSelect} 
                 selected={selectedId === item.id}
                 onToggleFavorite={() => handleToggleFavorite(item)}
+                language={language}
+                t={t}
               />
             ))}
             {viewMode === 'all' && (
@@ -191,7 +196,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({ onSelect, selectedId, viewMo
                   disabled={loadingMore}
                   className="px-4 py-2 bg-stone-200 hover:bg-stone-300 rounded text-stone-600 text-sm font-mono transition-colors disabled:opacity-50"
                 >
-                  {loadingMore ? 'Loading...' : 'Load More Archives'}
+                  {loadingMore ? t('news.loadingMore') : t('news.loadMore')}
                 </button>
               </div>
             )}

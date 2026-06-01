@@ -18,7 +18,7 @@ export interface AnalysisResult {
 export async function analyzeContent(title: string, snippet: string, url?: string): Promise<AnalysisResult> {
   if (!ai) {
     return { 
-      summary: "AI Analysis is disabled because GEMINI_API_KEY is missing or invalid. Please check your environment variables.", 
+      summary: "AI 分析已禁用，因为 GEMINI_API_KEY 缺失或无效。请检查环境变量配置。",
       sentiment: 0, 
       entities: [] 
     };
@@ -109,7 +109,7 @@ export async function analyzeContent(title: string, snippet: string, url?: strin
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error("AI Analysis Error:", errorMsg);
     return {
-        summary: `AI Analysis failed: ${errorMsg}\n\nThis usually happens if the article is behind a strict paywall, blocks AI crawlers, or triggers safety filters.`,
+        summary: `AI 分析失败：${errorMsg}\n\n常见原因是文章位于严格付费墙之后、阻止 AI 爬虫访问，或触发了安全过滤。`,
         sentiment: 0,
         entities: []
     };

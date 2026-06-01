@@ -25,7 +25,7 @@ export async function analyzeResearchDocument(
     return {
       relevanceScore: 0,
       relevant: false,
-      summary: "AI analysis is disabled because GEMINI_API_KEY is missing or invalid.",
+      summary: "AI 分析已禁用，因为 GEMINI_API_KEY 缺失或无效。",
       evidence: [],
     };
   }
@@ -83,7 +83,7 @@ ${content}
     return {
       relevanceScore: 0,
       relevant: false,
-      summary: `Research analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+      summary: `研究分析失败：${error instanceof Error ? error.message : String(error)}`,
       evidence: [],
     };
   }

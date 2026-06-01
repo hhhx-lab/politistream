@@ -1,27 +1,34 @@
 import React from 'react';
 import { ParsedNewsItem } from '../types';
 import { motion } from 'motion/react';
-import { ExternalLink, Share2, ShieldCheck, AlertTriangle, Bookmark } from 'lucide-react';
+import { ShieldCheck, Bookmark } from 'lucide-react';
 import { formatDistanceToNow, isValid } from 'date-fns';
+import { zhCN } from 'date-fns/locale';
+import { Language, Translator } from '../i18n';
 
 interface NewsCardProps {
   item: ParsedNewsItem;
   onSelect: (item: ParsedNewsItem) => void;
   selected: boolean;
   onToggleFavorite: () => void;
+  language: Language;
+  t: Translator;
 }
 
-export const NewsCard: React.FC<NewsCardProps> = ({ item, onSelect, selected, onToggleFavorite }) => {
+export const NewsCard: React.FC<NewsCardProps> = ({ item, onSelect, selected, onToggleFavorite, language, t }) => {
   const sentimentColor = 
     (item.sentiment || 0) > 0.3 ? 'text-emerald-600' : 
     (item.sentiment || 0) < -0.3 ? 'text-rose-600' : 
     'text-stone-500';
 
-  let timeAgo = 'recently';
+  let timeAgo = t('time.recently');
   try {
     const date = new Date(item.pubDate);
     if (isValid(date)) {
-      timeAgo = formatDistanceToNow(date, { addSuffix: true });
+      timeAgo = formatDistanceToNow(date, {
+        addSuffix: true,
+        locale: language === 'zh' ? zhCN : undefined,
+      });
     }
   } catch (e) {
     // Fallback
@@ -43,7 +50,7 @@ export const NewsCard: React.FC<NewsCardProps> = ({ item, onSelect, selected, on
             onToggleFavorite();
           }}
           className={`p-1.5 rounded-full hover:bg-stone-300 transition-colors ${item.is_favorite ? 'text-amber-600 opacity-100' : 'text-stone-400'}`}
-          title={item.is_favorite ? "Remove from library" : "Save to library"}
+          title={item.is_favorite ? t('card.removeFromLibrary') : t('card.saveToLibrary')}
         >
           <Bookmark size={16} fill={item.is_favorite ? "currentColor" : "none"} />
         </button>

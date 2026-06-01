@@ -1,6 +1,5 @@
 import "dotenv/config";
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import {
   addRSSSource,
   getFavorites,
@@ -19,12 +18,15 @@ import {
 } from "./src/server/services/rss";
 import { sendResearchConfigStatus } from "./src/server/research/http";
 import { createResearchRouter } from "./src/server/research/routes";
+import { startResearchWorkers } from "./src/server/research/workers/worker";
+import { getServerRuntimeConfig } from "./src/server/runtime";
 
 // ... (rest of imports)
 
 const app = express();
-const PORT = 3000;
+const runtime = getServerRuntimeConfig();
 
+app.use(createCorsMiddleware(runtime.appUrl));
 app.use(express.json());
 
 // Initialize Database
@@ -45,6 +47,15 @@ app.post("/api/refresh-ai", async (req, res) => {
 // API Routes
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+app.get("/api/runtime/status", (req, res) => {
+  res.json({
+    api: "ok",
+    port: runtime.port,
+    appUrl: runtime.appUrl,
+    refreshRssOnStartup: runtime.refreshRssOnStartup,
+  });
 });
 
 app.get("/api/research/status", sendResearchConfigStatus);
@@ -187,24 +198,34 @@ app.post("/api/refresh", async (req, res) => {
   }
 });
 
-// Vite Middleware
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    // Production static file serving would go here
-    // app.use(express.static('dist'));
-  }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    // Initial fetch on startup
-    fetchAndProcessFeeds().catch(console.error);
+  app.listen(runtime.port, "0.0.0.0", () => {
+    console.log(`API server running on http://localhost:${runtime.port}`);
+    startResearchWorkers();
+    if (runtime.refreshRssOnStartup) {
+      fetchAndProcessFeeds().catch(console.error);
+    } else {
+      console.log("RSS startup refresh disabled. Use POST /api/refresh to fetch feeds.");
+    }
   });
 }
 
 startServer();
+
+function createCorsMiddleware(appUrl: string) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const origin = req.headers.origin;
+    if (origin && origin === appUrl) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Headers", "Content-Type");
+      res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
+    }
+
+    if (req.method === "OPTIONS") {
+      return res.status(204).end();
+    }
+
+    next();
+  };
+}

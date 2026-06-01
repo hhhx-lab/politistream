@@ -1,17 +1,20 @@
 import React, { useState } from 'react';
 import { Plus, Power, RefreshCw } from 'lucide-react';
 import { FeedRefreshResult, FeedSource } from '../types';
+import { Translator } from '../i18n';
 
 interface RSSSourceManagerProps {
   sources: FeedSource[];
   onSourcesChange: (sources: FeedSource[]) => void;
   onRefreshComplete: () => void;
+  t: Translator;
 }
 
 export const RSSSourceManager: React.FC<RSSSourceManagerProps> = ({
   sources,
   onSourcesChange,
   onRefreshComplete,
+  t,
 }) => {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -42,7 +45,7 @@ export const RSSSourceManager: React.FC<RSSSourceManagerProps> = ({
       setName('');
       setUrl('');
       await loadSources();
-      setMessage('Source added.');
+      setMessage(t('rss.added'));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -75,7 +78,7 @@ export const RSSSourceManager: React.FC<RSSSourceManagerProps> = ({
       if (!res.ok && !data.source) throw new Error((data as any).error || `HTTP ${res.status}`);
       await loadSources();
       onRefreshComplete();
-      setMessage(data.success ? `Added ${data.newItems} item(s).` : data.error || 'Refresh failed.');
+      setMessage(data.success ? t('rss.addedItems', { count: data.newItems }) : data.error || t('rss.refreshFailed'));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -86,14 +89,14 @@ export const RSSSourceManager: React.FC<RSSSourceManagerProps> = ({
   return (
     <div className="h-full flex flex-col bg-stone-100 border-r border-[#141414]">
       <div className="p-4 border-b border-stone-300">
-        <h2 className="font-serif italic text-stone-600">RSS Sources</h2>
+        <h2 className="font-serif italic text-stone-600">{t('rss.sources')}</h2>
       </div>
 
       <form className="p-4 border-b border-stone-300 space-y-2" onSubmit={addSource}>
         <input
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder="Source name"
+          placeholder={t('rss.sourceName')}
           className="w-full border border-stone-300 bg-white px-3 py-2 text-sm"
         />
         <input
@@ -108,7 +111,7 @@ export const RSSSourceManager: React.FC<RSSSourceManagerProps> = ({
           className="w-full flex items-center justify-center gap-2 bg-stone-900 text-stone-100 px-3 py-2 text-sm disabled:opacity-50"
         >
           <Plus size={14} />
-          Add Source
+          {t('rss.addSource')}
         </button>
         {message && <p className="text-xs font-mono text-stone-700 break-words">{message}</p>}
       </form>
@@ -128,19 +131,19 @@ export const RSSSourceManager: React.FC<RSSSourceManagerProps> = ({
                 onClick={() => refreshSource(source)}
                 disabled={!source.enabled || refreshingId === source.id}
                 className="p-1.5 hover:bg-stone-200 rounded disabled:opacity-40"
-                title="Refresh source"
+                title={t('rss.refreshSource')}
               >
                 <RefreshCw size={14} className={refreshingId === source.id ? 'animate-spin' : ''} />
               </button>
               <button
                 onClick={() => toggleSource(source)}
                 className="p-1.5 hover:bg-stone-200 rounded"
-                title={source.enabled ? 'Disable source' : 'Enable source'}
+                title={source.enabled ? t('rss.disableSource') : t('rss.enableSource')}
               >
                 <Power size={14} />
               </button>
               <span className="text-[10px] font-mono opacity-50 truncate">
-                {source.last_fetched_at ? new Date(source.last_fetched_at).toLocaleString() : 'Never refreshed'}
+                {source.last_fetched_at ? new Date(source.last_fetched_at).toLocaleString() : t('rss.neverRefreshed')}
               </span>
             </div>
             {source.last_error && (
