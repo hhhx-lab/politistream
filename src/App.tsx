@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Bookmark,
+  Bot,
   Copy,
+  BarChart3,
   Database,
   ExternalLink,
   Home,
@@ -13,10 +15,13 @@ import {
 import { NewsFeed } from './components/NewsFeed';
 import { RSSSourceManager } from './components/RSSSourceManager';
 import { ResearchPanel } from './components/ResearchPanel';
+import { AgentConsole } from './components/AgentConsole';
+import { DataLab } from './components/DataLab';
 import { createTranslator, isLanguage, Language, nextLanguage, Translator } from './i18n';
 import {
   FeedSource,
   ParsedNewsItem,
+  ResearchConstraints,
   ResearchBudget,
   ResearchConfigStatus,
   ResearchJobSummary,
@@ -24,14 +29,20 @@ import {
   RuntimeStatus,
 } from './types';
 
-type Workspace = 'home' | 'news' | 'research';
+type Workspace = 'agent' | 'home' | 'news' | 'research' | 'dataLab';
 type ViewMode = 'all' | 'favorites' | 'warehouse';
 type ResearchMode = 'quick' | 'standard' | 'deep';
+
+interface DataLabFocus {
+  runId?: string;
+  datasetId?: string;
+}
 
 interface ResearchSearchInput {
   topic: string;
   seedUrls: string[];
   budget: Partial<ResearchBudget>;
+  constraints: ResearchConstraints;
 }
 
 const RESEARCH_MODE_BUDGETS: Record<ResearchMode, Partial<ResearchBudget>> = {
@@ -46,6 +57,7 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('all');
   const [workspace, setWorkspace] = useState<Workspace>('home');
   const [selectedResearchJobId, setSelectedResearchJobId] = useState<string | undefined>();
+  const [dataLabFocus, setDataLabFocus] = useState<DataLabFocus>({});
   const [analyzing, setAnalyzing] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
@@ -93,6 +105,7 @@ function App() {
           topic: normalizedTopic,
           seedUrls: input.seedUrls,
           budget: input.budget,
+          constraints: input.constraints,
         }),
       });
       const job = await createRes.json() as ResearchJobSummary;
@@ -185,9 +198,40 @@ ${selectedItem.contentSnippet}
     setViewMode(mode);
   };
 
+  const openDataLab = (focus: DataLabFocus = {}) => {
+    setDataLabFocus(focus);
+    setWorkspace('dataLab');
+  };
+
+  const openResearchRun = (_runId?: string) => {
+    setWorkspace('research');
+  };
+
   return (
-    <div className="h-screen w-full bg-[#E4E3E0] text-[#141414] font-sans flex overflow-hidden">
-      <aside className="w-64 border-r border-[#141414] flex flex-col bg-[#E4E3E0] flex-shrink-0">
+    <div className="h-screen w-full bg-[#E4E3E0] text-[#141414] font-sans flex flex-col lg:flex-row overflow-hidden">
+      <header className="border-b border-[#141414] bg-[#E4E3E0] lg:hidden">
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="font-serif italic text-lg">PolitiStream</div>
+          <button
+            onClick={() => setLanguage(nextLanguage(language))}
+            className="px-2 py-1 border border-stone-400 text-[10px] font-mono uppercase hover:bg-[#D4D3D0]"
+            title={t('language.current')}
+          >
+            {t('language.toggle')}
+          </button>
+        </div>
+        <nav className="flex gap-2 overflow-x-auto px-3 pb-3">
+          <MobileNavItem active={workspace === 'home'} icon={<Home size={15} />} label={t('nav.searchHome')} onClick={() => setWorkspace('home')} />
+          <MobileNavItem active={workspace === 'agent'} icon={<Bot size={15} />} label={t('nav.agentConsole')} onClick={() => setWorkspace('agent')} />
+          <MobileNavItem active={workspace === 'research'} icon={<Search size={15} />} label={t('nav.researchJobs')} onClick={() => setWorkspace('research')} />
+          <MobileNavItem active={workspace === 'dataLab'} icon={<BarChart3 size={15} />} label={t('nav.dataLab')} onClick={() => setWorkspace('dataLab')} />
+          <MobileNavItem active={workspace === 'news' && viewMode === 'all'} icon={<Rss size={15} />} label={t('nav.rssMonitoring')} onClick={() => openNews('all')} />
+          <MobileNavItem active={workspace === 'news' && viewMode === 'favorites'} icon={<Bookmark size={15} />} label={t('nav.savedLibrary')} onClick={() => openNews('favorites')} />
+          <MobileNavItem active={workspace === 'news' && viewMode === 'warehouse'} icon={<Database size={15} />} label={t('nav.aiWorkQueue')} onClick={() => openNews('warehouse')} />
+        </nav>
+      </header>
+
+      <aside className="hidden w-64 border-r border-[#141414] flex-col bg-[#E4E3E0] flex-shrink-0 lg:flex">
         <div className="h-16 border-b border-[#141414] flex items-center justify-between gap-3 px-6">
           <div className="font-serif italic text-lg">PolitiStream</div>
           <button
@@ -204,7 +248,9 @@ ${selectedItem.contentSnippet}
             <h3 className="text-xs font-mono uppercase tracking-widest opacity-50 mb-4 px-2">{t('nav.research')}</h3>
             <div className="space-y-2">
               <NavItem active={workspace === 'home'} icon={<Home size={16} />} label={t('nav.searchHome')} onClick={() => setWorkspace('home')} />
+              <NavItem active={workspace === 'agent'} icon={<Bot size={16} />} label={t('nav.agentConsole')} onClick={() => setWorkspace('agent')} />
               <NavItem active={workspace === 'research'} icon={<Search size={16} />} label={t('nav.researchJobs')} onClick={() => setWorkspace('research')} />
+              <NavItem active={workspace === 'dataLab'} icon={<BarChart3 size={16} />} label={t('nav.dataLab')} onClick={() => setWorkspace('dataLab')} />
             </div>
           </div>
 
@@ -243,7 +289,23 @@ ${selectedItem.contentSnippet}
 
       <main className="flex-1 min-w-0 overflow-hidden">
         {workspace === 'home' && (
-          <SearchHome onSearch={handleResearchSearch} loading={searching} error={searchError} t={t} />
+          <SearchHome
+            onSearch={handleResearchSearch}
+            loading={searching}
+            error={searchError}
+            t={t}
+            onOpenWorkspace={setWorkspace}
+          />
+        )}
+
+        {workspace === 'agent' && (
+          <AgentConsole
+            language={language}
+            onResearchQueued={(jobId) => {
+              setSelectedResearchJobId(jobId);
+              setWorkspace('research');
+            }}
+          />
         )}
 
         {workspace === 'research' && (
@@ -251,15 +313,20 @@ ${selectedItem.contentSnippet}
             selectedJobId={selectedResearchJobId}
             onSelectedJobChange={setSelectedResearchJobId}
             onBackToSearch={() => setWorkspace('home')}
+            onOpenDataLab={openDataLab}
             language={language}
             t={t}
           />
         )}
 
+        {workspace === 'dataLab' && (
+          <DataLab language={language} focus={dataLabFocus} onOpenResearchRun={openResearchRun} />
+        )}
+
         {workspace === 'news' && (
-          <div className="h-full flex min-w-0">
+          <div className="h-full flex min-w-0 flex-col overflow-hidden lg:flex-row">
             {viewMode === 'all' && (
-              <div className="w-80 flex-shrink-0">
+              <div className="max-h-[18rem] w-full flex-shrink-0 border-b border-[#141414] lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
                 <RSSSourceManager
                   sources={feeds}
                   onSourcesChange={setFeeds}
@@ -268,7 +335,7 @@ ${selectedItem.contentSnippet}
                 />
               </div>
             )}
-            <div className="w-96 border-r border-[#141414] bg-[#F5F5F4] flex flex-col flex-shrink-0">
+            <div className="min-h-[18rem] w-full border-b border-[#141414] bg-[#F5F5F4] flex flex-col flex-shrink-0 lg:min-h-0 lg:w-96 lg:border-b-0 lg:border-r">
               <NewsFeed
                 key={`${viewMode}-${newsRefreshToken}`}
                 onSelect={setSelectedItem}
@@ -307,15 +374,41 @@ const NavItem: React.FC<{
   </button>
 );
 
+const MobileNavItem: React.FC<{
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}> = ({ active, icon, label, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`inline-flex shrink-0 items-center gap-2 border px-3 py-2 text-xs transition-colors ${
+      active ? 'border-[#141414] bg-[#141414] text-stone-100' : 'border-stone-400 bg-[#F5F5F4] text-stone-700'
+    }`}
+  >
+    {icon}
+    <span className="whitespace-nowrap">{label}</span>
+  </button>
+);
+
 const SearchHome: React.FC<{
   onSearch: (input: ResearchSearchInput) => void;
   loading: boolean;
   error: string;
   t: Translator;
-}> = ({ onSearch, loading, error, t }) => {
+  onOpenWorkspace: (workspace: Workspace) => void;
+}> = ({ onSearch, loading, error, t, onOpenWorkspace }) => {
   const [topic, setTopic] = useState('');
   const [mode, setMode] = useState<ResearchMode>('standard');
   const [seedUrlsText, setSeedUrlsText] = useState('');
+  const [timeFrom, setTimeFrom] = useState('');
+  const [timeTo, setTimeTo] = useState('');
+  const [contentTypesText, setContentTypesText] = useState('html, pdf, csv, json');
+  const [sourceDomainsText, setSourceDomainsText] = useState('');
+  const [excludeDomainsText, setExcludeDomainsText] = useState('');
+  const [languagesText, setLanguagesText] = useState('zh, en');
+  const [includeKeywordsText, setIncludeKeywordsText] = useState('');
+  const [excludeKeywordsText, setExcludeKeywordsText] = useState('');
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [researchStatus, setResearchStatus] = useState<ResearchConfigStatus | null>(null);
   const [statusError, setStatusError] = useState('');
@@ -341,61 +434,174 @@ const SearchHome: React.FC<{
     };
   }, []);
 
+  const submitSearch = () => {
+    onSearch({
+      topic,
+      seedUrls: parseSeedUrls(seedUrlsText),
+      budget: RESEARCH_MODE_BUDGETS[mode],
+      constraints: buildResearchConstraints({
+        timeFrom,
+        timeTo,
+        contentTypesText,
+        sourceDomainsText,
+        excludeDomainsText,
+        languagesText,
+        includeKeywordsText,
+        excludeKeywordsText,
+      }),
+    });
+  };
+
   return (
     <div className="h-full overflow-y-auto bg-[#E4E3E0]">
-      <div className="min-h-full max-w-5xl mx-auto px-6 py-14 flex flex-col justify-center">
-        <div className="font-mono text-xs uppercase tracking-widest opacity-50 mb-5">{t('searchHome.eyebrow')}</div>
-        <h1 className="font-serif text-5xl md:text-7xl leading-none mb-8">
-          PolitiStream
-        </h1>
+      <div className="min-h-full max-w-6xl mx-auto px-6 py-14 space-y-6">
+        <header className="space-y-4">
+          <div className="font-mono text-xs uppercase tracking-widest opacity-50">{t('searchHome.eyebrow')}</div>
+          <h1 className="font-serif text-5xl md:text-7xl leading-none">PolitiStream</h1>
+          <p className="max-w-3xl text-base leading-7 opacity-80">
+            {t('searchHome.hero')}
+          </p>
+        </header>
+
         <form
-          className="border border-[#141414] bg-[#F5F5F4] flex flex-col md:flex-row"
+          className="border border-[#141414] bg-[#F5F5F4]"
           onSubmit={(event) => {
             event.preventDefault();
-            onSearch({
-              topic,
-              seedUrls: parseSeedUrls(seedUrlsText),
-              budget: RESEARCH_MODE_BUDGETS[mode],
-            });
+            submitSearch();
           }}
         >
-          <input
-            value={topic}
-            onChange={(event) => setTopic(event.target.value)}
-            placeholder={t('searchHome.placeholder')}
-            className="flex-1 min-w-0 bg-transparent px-5 py-5 text-lg outline-none"
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="md:w-48 flex items-center justify-center gap-2 border-t md:border-t-0 md:border-l border-[#141414] px-5 py-4 bg-stone-900 text-stone-100 disabled:opacity-50"
-          >
-            <Search size={18} />
-            <span className="font-mono text-xs uppercase">{loading ? t('searchHome.running') : t('searchHome.submit')}</span>
-          </button>
-        </form>
-        <div className="mt-3 grid md:grid-cols-[1fr_2fr] gap-3">
-          <div className="border border-stone-300 bg-stone-100 p-1 flex">
-            {(['quick', 'standard', 'deep'] as ResearchMode[]).map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setMode(option)}
-                className={`flex-1 px-3 py-2 text-xs font-mono uppercase ${mode === option ? 'bg-stone-900 text-stone-100' : 'text-stone-600 hover:bg-stone-200'}`}
-              >
-                {t(`searchHome.${option}`)}
-              </button>
-            ))}
+          <div className="border-b border-[#141414] flex flex-col md:flex-row">
+            <input
+              value={topic}
+              onChange={(event) => setTopic(event.target.value)}
+              placeholder={t('searchHome.placeholder')}
+              className="flex-1 min-w-0 bg-transparent px-5 py-5 text-lg outline-none"
+            />
+            <button
+              type="submit"
+              disabled={loading}
+              className="md:w-48 flex items-center justify-center gap-2 border-t md:border-t-0 md:border-l border-[#141414] px-5 py-4 bg-stone-900 text-stone-100 disabled:opacity-50"
+            >
+              <Search size={18} />
+              <span className="font-mono text-xs uppercase">{loading ? t('searchHome.running') : t('searchHome.submit')}</span>
+            </button>
           </div>
-          <input
-            value={seedUrlsText}
-            onChange={(event) => setSeedUrlsText(event.target.value)}
-            placeholder={t('searchHome.seedPlaceholder')}
-            className="border border-stone-300 bg-stone-100 px-4 py-3 text-sm outline-none"
-          />
-        </div>
-        {error && <p className="mt-4 text-sm font-mono text-rose-700">{error}</p>}
-        <div className="grid md:grid-cols-4 gap-3 mt-8">
+
+          <div className="border-b border-stone-300 p-4 grid md:grid-cols-[repeat(3,minmax(0,1fr))] gap-3">
+            <div className="border border-stone-300 bg-white/80 p-1 flex">
+              {(['quick', 'standard', 'deep'] as ResearchMode[]).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setMode(option)}
+                  className={`flex-1 px-3 py-2 text-xs font-mono uppercase ${mode === option ? 'bg-stone-900 text-stone-100' : 'text-stone-600 hover:bg-stone-200'}`}
+                >
+                  {t(`searchHome.${option}`)}
+                </button>
+              ))}
+            </div>
+
+            <input
+              value={seedUrlsText}
+              onChange={(event) => setSeedUrlsText(event.target.value)}
+              placeholder={t('searchHome.seedPlaceholder')}
+              className="border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+            />
+
+            <div className="border border-stone-300 bg-white px-4 py-3 text-xs leading-5 text-stone-600">
+              {t('searchHome.constraintHint')}
+            </div>
+          </div>
+
+          <div className="border-b border-stone-300 p-4">
+            <div className="font-mono text-[10px] uppercase opacity-50 mb-3">{t('searchHome.advanced')}</div>
+            <div className="grid lg:grid-cols-2 gap-3">
+              <div className="grid md:grid-cols-2 gap-3">
+                <input
+                  value={timeFrom}
+                  onChange={(event) => setTimeFrom(event.target.value)}
+                  placeholder={t('searchHome.timeFrom')}
+                  className="border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+                <input
+                  value={timeTo}
+                  onChange={(event) => setTimeTo(event.target.value)}
+                  placeholder={t('searchHome.timeTo')}
+                  className="border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+                <textarea
+                  value={contentTypesText}
+                  onChange={(event) => setContentTypesText(event.target.value)}
+                  placeholder={t('searchHome.contentTypes')}
+                  className="min-h-24 border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+                <textarea
+                  value={languagesText}
+                  onChange={(event) => setLanguagesText(event.target.value)}
+                  placeholder={t('searchHome.languages')}
+                  className="min-h-24 border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                <textarea
+                  value={sourceDomainsText}
+                  onChange={(event) => setSourceDomainsText(event.target.value)}
+                  placeholder={t('searchHome.sourceDomains')}
+                  className="min-h-24 border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+                <textarea
+                  value={excludeDomainsText}
+                  onChange={(event) => setExcludeDomainsText(event.target.value)}
+                  placeholder={t('searchHome.excludeDomains')}
+                  className="min-h-24 border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+                <textarea
+                  value={includeKeywordsText}
+                  onChange={(event) => setIncludeKeywordsText(event.target.value)}
+                  placeholder={t('searchHome.includeKeywords')}
+                  className="min-h-24 border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+                <textarea
+                  value={excludeKeywordsText}
+                  onChange={(event) => setExcludeKeywordsText(event.target.value)}
+                  placeholder={t('searchHome.excludeKeywords')}
+                  className="min-h-24 border border-stone-300 bg-white px-4 py-3 text-sm outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        </form>
+
+        <section className="border border-[#141414] bg-[#F5F5F4] p-4">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <div className="font-mono text-[10px] uppercase opacity-50">{t('searchHome.manualEntry')}</div>
+              <div className="text-sm opacity-70 mt-1">{t('searchHome.manualHint')}</div>
+            </div>
+          </div>
+          <div className="grid md:grid-cols-4 gap-3">
+            <button type="button" onClick={() => onOpenWorkspace('agent')} className="border border-stone-300 bg-white px-4 py-4 text-left hover:bg-stone-50">
+              <div className="font-mono text-[10px] uppercase opacity-50">Agent</div>
+              <div className="font-serif text-xl mt-1">{t('searchHome.openAgent')}</div>
+            </button>
+            <button type="button" onClick={() => onOpenWorkspace('research')} className="border border-stone-300 bg-white px-4 py-4 text-left hover:bg-stone-50">
+              <div className="font-mono text-[10px] uppercase opacity-50">{t('nav.research')}</div>
+              <div className="font-serif text-xl mt-1">{t('searchHome.openResearch')}</div>
+            </button>
+            <button type="button" onClick={() => onOpenWorkspace('dataLab')} className="border border-stone-300 bg-white px-4 py-4 text-left hover:bg-stone-50">
+              <div className="font-mono text-[10px] uppercase opacity-50">{t('nav.dataLab')}</div>
+              <div className="font-serif text-xl mt-1">{t('searchHome.openDataLab')}</div>
+            </button>
+            <button type="button" onClick={() => onOpenWorkspace('news')} className="border border-stone-300 bg-white px-4 py-4 text-left hover:bg-stone-50">
+              <div className="font-mono text-[10px] uppercase opacity-50">{t('nav.newsCrawler')}</div>
+              <div className="font-serif text-xl mt-1">{t('searchHome.openNews')}</div>
+            </button>
+          </div>
+        </section>
+
+        {error && <p className="text-sm font-mono text-rose-700">{error}</p>}
+
+        <div className="grid md:grid-cols-3 xl:grid-cols-7 gap-3">
           <StatusTile
             label={t('status.api')}
             value={runtimeStatus?.api === 'ok' ? t('status.online') : t('status.unknown')}
@@ -403,8 +609,13 @@ const SearchHome: React.FC<{
           />
           <StatusTile
             label={t('status.researchDb')}
-            value={researchStatus?.databaseConfigured ? t('status.configured') : t('status.missing')}
-            tone={researchStatus?.databaseConfigured ? 'good' : 'warn'}
+            value={researchStatus?.readyForStorage ? t('status.online') : t('status.missing')}
+            tone={researchStatus?.readyForStorage ? 'good' : 'warn'}
+          />
+          <StatusTile
+            label={t('status.queue')}
+            value={researchStatus?.readyForQueue ? t('status.online') : t('status.missing')}
+            tone={researchStatus?.readyForQueue ? 'good' : 'warn'}
           />
           <StatusTile
             label={t('status.providers')}
@@ -412,12 +623,23 @@ const SearchHome: React.FC<{
             tone={(researchStatus?.enabledSearchProviderCount ?? 0) > 0 ? 'good' : 'warn'}
           />
           <StatusTile
+            label={t('status.dataProviders')}
+            value={`${researchStatus?.enabledDataProviderCount ?? 0} ${t('status.enabled')}`}
+            tone={(researchStatus?.enabledDataProviderCount ?? 0) > 0 ? 'good' : 'warn'}
+          />
+          <StatusTile
+            label={t('status.aiModel')}
+            value={researchStatus?.ai?.configured ? `${researchStatus?.ai?.provider ?? 'openai'} / ${researchStatus?.ai?.model ?? 'gpt-5.4'}` : t('status.missing')}
+            tone={researchStatus?.ai?.configured ? 'good' : 'warn'}
+          />
+          <StatusTile
             label={t('status.rssStartup')}
             value={runtimeStatus?.refreshRssOnStartup ? t('status.auto') : t('status.manual')}
             tone="muted"
           />
         </div>
-        {statusError && <p className="mt-3 text-xs font-mono text-rose-700">{statusError}</p>}
+
+        {statusError && <p className="text-xs font-mono text-rose-700">{statusError}</p>}
       </div>
     </div>
   );
@@ -428,6 +650,52 @@ function parseSeedUrls(value: string) {
     .split(/[\n,\s]+/)
     .map((url) => url.trim())
     .filter((url) => url.startsWith('http://') || url.startsWith('https://'));
+}
+
+function buildResearchConstraints(input: {
+  timeFrom: string;
+  timeTo: string;
+  contentTypesText: string;
+  sourceDomainsText: string;
+  excludeDomainsText: string;
+  languagesText: string;
+  includeKeywordsText: string;
+  excludeKeywordsText: string;
+}): ResearchConstraints {
+  const timeFrom = input.timeFrom.trim();
+  const timeTo = input.timeTo.trim();
+  const contentTypes = parseList(input.contentTypesText);
+  const sourceDomains = parseList(input.sourceDomainsText);
+  const excludeDomains = parseList(input.excludeDomainsText);
+  const languages = parseList(input.languagesText);
+  const includeKeywords = parseList(input.includeKeywordsText);
+  const excludeKeywords = parseList(input.excludeKeywordsText);
+
+  const constraints: ResearchConstraints = {};
+  if (timeFrom || timeTo) {
+    constraints.timeRange = {
+      ...(timeFrom ? { from: timeFrom } : {}),
+      ...(timeTo ? { to: timeTo } : {}),
+    };
+  }
+  if (contentTypes.length > 0) constraints.contentTypes = contentTypes;
+  if (sourceDomains.length > 0 || excludeDomains.length > 0) {
+    constraints.sourceScope = {
+      ...(sourceDomains.length > 0 ? { domains: sourceDomains } : {}),
+      ...(excludeDomains.length > 0 ? { excludeDomains } : {}),
+    };
+  }
+  if (languages.length > 0) constraints.languages = languages;
+  if (includeKeywords.length > 0) constraints.includeKeywords = includeKeywords;
+  if (excludeKeywords.length > 0) constraints.excludeKeywords = excludeKeywords;
+  return constraints;
+}
+
+function parseList(value: string) {
+  return value
+    .split(/[\n,，;；\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 const StatusTile: React.FC<{

@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: politistream-postgres
+    environment:
+      POSTGRES_USER: politistream
+      POSTGRES_PASSWORD: politistream
+      POSTGRES_DB: politistream
+    ports:
+      - "15432:5432"
+    volumes:
+      - politistream-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U politistream -d politistream"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: politistream-redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - politistream-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  politistream-postgres-data:
+  politistream-redis-data:

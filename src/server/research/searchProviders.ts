@@ -1,12 +1,14 @@
 import axios from "axios";
 import { getResearchConfig, ResearchConfig } from "./config";
 import { canonicalizeUrl } from "./url";
-import { ProviderName, SearchCandidate } from "./types";
+import { ProviderName, SearchCandidate, QueryPurpose, SourceType } from "./types";
 
 interface ProviderSearchInput {
   jobId: string;
   query: string;
   depth?: number;
+  purpose?: QueryPurpose;
+  sourceTypes?: SourceType[];
 }
 
 interface ProviderAdapter {
@@ -76,7 +78,30 @@ const tavilyProvider: ProviderAdapter = {
   },
 };
 
-export const SEARCH_PROVIDERS: ProviderAdapter[] = [braveProvider, serpApiProvider, tavilyProvider];
+const newsApiProvider: ProviderAdapter = {
+  name: "newsapi",
+  enabled: (config) => Boolean(config.newsApiKey),
+  async search(input, config) {
+    if (!isNewsSearch(input)) return [];
+
+    const response = await axios.get("https://newsapi.org/v2/everything", {
+      headers: {
+        "X-Api-Key": config.newsApiKey,
+      },
+      params: {
+        q: input.query,
+        pageSize: 10,
+        sortBy: "relevancy",
+        language: "en",
+      },
+      timeout: 15000,
+    });
+
+    return normalizeNewsApiResults(response.data, input);
+  },
+};
+
+export const SEARCH_PROVIDERS: ProviderAdapter[] = [braveProvider, serpApiProvider, newsApiProvider, tavilyProvider];
 
 export async function searchConfiguredProviders(
   input: ProviderSearchInput,
@@ -131,6 +156,19 @@ export function normalizeTavilyResults(data: any, input: ProviderSearchInput): S
     title: "title",
     snippet: "content",
   });
+}
+
+export function normalizeNewsApiResults(data: any, input: ProviderSearchInput): SearchCandidate[] {
+  return normalizeResultList(data?.articles ?? [], input, "newsapi", {
+    url: "url",
+    title: "title",
+    snippet: "description",
+  });
+}
+
+function isNewsSearch(input: ProviderSearchInput) {
+  if (input.sourceTypes?.some((type) => ["mainstream-news", "official"].includes(type))) return true;
+  return /news|新闻|报道|headline|press release|公告|声明|时事/i.test(input.query) || input.purpose === "news-coverage";
 }
 
 function normalizeResultList(

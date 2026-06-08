@@ -29,3 +29,14 @@ export function runStatusForStage(stage: ResearchStageName) {
   if (stage === "report") return "reporting";
   return stage;
 }
+
+export function resumeStageForRunStatus(status: string): ResearchStageName | null {
+  if (status === "queued" || status === "planning" || status === "paused") return "discovery";
+  if (status === "discovery") return "discovery";
+  if (status === "frontier") return "frontier";
+  if (status === "fetching") return "fetch";
+  if (status === "extracting") return "extract";
+  if (status === "analyzing") return "analyze";
+  if (status === "reporting") return "report";
+  return null;
+}

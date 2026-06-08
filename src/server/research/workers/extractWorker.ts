@@ -4,8 +4,9 @@ import { runStage } from "./stageRunner";
 import { ResearchStageJobPayload } from "./stageTypes";
 
 export async function processExtractStage(payload: ResearchStageJobPayload) {
-  await runStage(payload, async () => {
+  const shouldContinue = await runStage(payload, async () => {
     await extractDocumentsForRun(payload.runId);
   });
+  if (!shouldContinue) return;
   await enqueueResearchStage({ ...payload, stage: "analyze", attemptReason: "initial" });
 }

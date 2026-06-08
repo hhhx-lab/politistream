@@ -1,14 +1,22 @@
 import assert from "assert";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import path from "path";
 import { normalizeRSSSourceUrl } from "../db";
+import { getResearchConfigStatus, resolveAiModel, resolveAiProvider } from "./config";
 import { normalizeResearchBudget, createRunBudgetState, canAcceptUrlForRun, recordAcceptedUrl } from "./budget";
-import { normalizeDiscoveredCandidate } from "./discovery/registry";
+import { createDefaultDiscoveryProviders, normalizeDiscoveredCandidate } from "./discovery/registry";
+import { runEnhancedFetchSmoke } from "./evaluation/enhancedFetchSmoke";
 import { buildEvidenceClaim, createSourceProfile } from "./evidence/graph";
 import { routeExtractorForUrl } from "./extractors/router";
 import { extractTablesFromHtml } from "./extractors/tableExtractor";
-import { scoreFrontierItem } from "./frontier/scoring";
+import { FRONTIER_SCORE_WEIGHTS, scoreFrontierItem, scoreFrontierItemBreakdown } from "./frontier/scoring";
 import { planResearch } from "./queryPlanner";
+import { getResearchCapabilityAudit } from "./evaluation/capabilityAudit";
+import { runResearchSampleAcceptance } from "./evaluation/sampleAcceptance";
+import { getLatestSmokeEvidence, persistSmokeEvidence, runDataSourceLiveSmoke, runPressureSmoke, runProviderLiveSmoke } from "./evaluation/smoke";
 import { generateMarkdownReport } from "./reports";
-import { normalizeBraveResults, normalizeSerpApiResults, normalizeTavilyResults } from "./searchProviders";
+import { normalizeBraveResults, normalizeNewsApiResults, normalizeSerpApiResults, normalizeTavilyResults } from "./searchProviders";
 import { canonicalizeUrl } from "./url";
 import { getResearchQueueNames } from "./workers/queues";
 
@@ -32,6 +40,7 @@ function testProviderNormalization() {
   const input = { jobId: "job-1", query: "ai chips", depth: 0 };
   assert.equal(normalizeBraveResults({ web: { results: [{ url: "https://a.com/?utm_source=x", title: "A", description: "A desc" }] } }, input)[0].canonicalUrl, "https://a.com/");
   assert.equal(normalizeSerpApiResults({ organic_results: [{ link: "https://b.com", title: "B", snippet: "B desc" }] }, input)[0].provider, "serpapi");
+  assert.equal(normalizeNewsApiResults({ articles: [{ url: "https://news.example.com/article", title: "News", description: "News desc" }] }, input)[0].provider, "newsapi");
   assert.equal(normalizeTavilyResults({ results: [{ url: "https://c.com", title: "C", content: "C desc" }] }, input)[0].provider, "tavily");
 }
 
@@ -55,8 +64,44 @@ function testDiscoveryCandidateNormalization() {
   assert.equal(candidate.depth, 0);
 }
 
+function testAiProviderRouting() {
+  const openaiConfig = {
+    databaseUrl: "postgres://localhost/politistream",
+    redisUrl: "redis://localhost:6379",
+    aiProvider: "openai",
+    openaiApiKey: "sk-openai-test-123",
+    geminiApiKey: "",
+    aiModel: "gpt-5.4",
+    newsApiKey: "news-api-test-123",
+    browserProvider: "local" as const,
+  };
+  const geminiFallbackConfig = {
+    databaseUrl: "postgres://localhost/politistream",
+    redisUrl: "redis://localhost:6379",
+    aiProvider: "openai",
+    openaiApiKey: "",
+    geminiApiKey: "gemini-key-test-123",
+    aiModel: "gpt-5.4",
+    newsApiKey: "",
+    browserProvider: "local" as const,
+  };
+
+  assert.equal(resolveAiProvider(openaiConfig), "openai");
+  assert.equal(resolveAiModel(openaiConfig), "gpt-5.4");
+  assert.equal(resolveAiProvider(geminiFallbackConfig), "gemini");
+  assert.equal(resolveAiModel(geminiFallbackConfig), "gemini-2.0-flash");
+
+  const status = getResearchConfigStatus(openaiConfig);
+  assert.equal(status.ai.provider, "openai");
+  assert.equal(status.ai.model, "gpt-5.4");
+  assert.equal(status.ai.configured, true);
+  assert.equal(status.ai.openaiConfigured, true);
+  assert.equal(status.ai.geminiConfigured, false);
+  assert.equal(status.searchProviders.newsApi, true);
+}
+
 function testFrontierPriorityScoring() {
-  const official = scoreFrontierItem({
+  const officialInput = {
     url: "https://www.sec.gov/news/press-release/example",
     sourceType: "official",
     title: "Official SEC statement",
@@ -64,7 +109,9 @@ function testFrontierPriorityScoring() {
     topic: "SEC rule",
     depth: 0,
     discoveredDomainCount: 1,
-  });
+  } as const;
+  const official = scoreFrontierItem(officialInput);
+  const officialBreakdown = scoreFrontierItemBreakdown(officialInput);
 
   const lowQuality = scoreFrontierItem({
     url: "https://example-blog.test/post",
@@ -79,6 +126,18 @@ function testFrontierPriorityScoring() {
   assert.ok(official > lowQuality);
   assert.ok(official <= 1);
   assert.ok(lowQuality >= 0);
+  assert.equal(officialBreakdown.finalScore, official);
+  assert.deepEqual(officialBreakdown.weights, FRONTIER_SCORE_WEIGHTS);
+  for (const value of [
+    officialBreakdown.topicalRelevance,
+    officialBreakdown.sourceAuthority,
+    officialBreakdown.primarySourceLikelihood,
+    officialBreakdown.freshness,
+    officialBreakdown.sourceDiversity,
+    officialBreakdown.linkContextQuality,
+  ]) {
+    assert.ok(value >= 0 && value <= 1, "frontier score components must stay normalized");
+  }
 }
 
 function testExtractorRoutingAndTableExtraction() {
@@ -87,6 +146,9 @@ function testExtractorRoutingAndTableExtraction() {
   assert.equal(routeExtractorForUrl("https://www.npmjs.com/package/pandoc", "text/html"), "npm");
   assert.equal(routeExtractorForUrl("https://pypi.org/project/pypandoc/", "text/html"), "pypi");
   assert.equal(routeExtractorForUrl("https://example.com/sitemap.xml", "application/xml"), "sitemap");
+  assert.equal(routeExtractorForUrl("https://example.com/data.csv", "text/csv"), "csv");
+  assert.equal(routeExtractorForUrl("https://example.com/data.parquet", ""), "parquet");
+  assert.equal(routeExtractorForUrl("https://example.com/map.geojson", "application/geo+json"), "geojson");
 
   const tables = extractTablesFromHtml(`
     <table>
@@ -120,6 +182,23 @@ function testCredibilityAndEvidenceGraph() {
   assert.ok(claim.confidence > 0.6);
 }
 
+function testDefaultDiscoveryProvidersIncludeDataSources() {
+  const names = new Set(createDefaultDiscoveryProviders({
+    aiModel: "gpt-5.4",
+    browserProvider: "local",
+  }).map((provider) => provider.name));
+  assert.ok(names.has("gdelt"));
+  assert.ok(names.has("wayback"));
+  assert.ok(names.has("commoncrawl"));
+  assert.ok(names.has("ckan"));
+  assert.ok(names.has("socrata"));
+  assert.ok(names.has("kaggle"));
+  assert.ok(names.has("huggingface"));
+  assert.ok(names.has("worldbank"));
+  assert.ok(names.has("openalex"));
+  assert.ok(names.has("sports"));
+}
+
 function testPlannerClassifiesToolEvaluation() {
   const plan = planResearch("好用的文档转换工具，Markdown DOCX PDF PPT 表格互转，本地可跑，保真度好");
   const queryPurposes = new Set(plan.queries.map((query) => query.purpose));
@@ -138,6 +217,32 @@ function testPlannerClassifiesToolEvaluation() {
   assert.ok(queryPurposes.has("benchmark"));
   assert.ok(queryPurposes.has("community-feedback"));
   assert.ok(plan.queries.length >= 8);
+}
+
+function testPlannerClassifiesDataResearch() {
+  const plan = planResearch("比赛需要的公开数据源，Kaggle CSV 数据集，做统计图和 SPSS 分析");
+  const queryPurposes = new Set(plan.queries.map((query) => query.purpose));
+  const requiredSourceTypes = new Set(plan.requiredSourceTypes);
+
+  assert.equal(plan.taskType, "sports-analysis");
+  assert.ok(requiredSourceTypes.has("sports-data"));
+  assert.ok(requiredSourceTypes.has("dataset"));
+  assert.ok(queryPurposes.has("sports-data"));
+  assert.ok(queryPurposes.has("competition-data"));
+}
+
+function testPlannerClassifiesGenericDataResearch() {
+  const plan = planResearch("城市空气质量公开数据源 CSV 可视化统计分析");
+  const queryPurposes = new Set(plan.queries.map((query) => query.purpose));
+  const requiredSourceTypes = new Set(plan.requiredSourceTypes);
+
+  assert.equal(plan.taskType, "data-research");
+  assert.ok(requiredSourceTypes.has("dataset"));
+  assert.ok(requiredSourceTypes.has("data-catalog"));
+  assert.ok(requiredSourceTypes.has("structured-api"));
+  assert.ok(queryPurposes.has("dataset-discovery"));
+  assert.ok(queryPurposes.has("statistical-source"));
+  assert.ok(queryPurposes.has("visualization"));
 }
 
 function testPlannerClassifiesVerification() {
@@ -164,6 +269,33 @@ function testPlannerAddsSeedDomainQueries() {
   assert.ok(seedQuery.sourceTypes.includes("official"));
 }
 
+function testPlannerHonorsResearchConstraints() {
+  const plan = planResearch(
+    "AI 文档转换工具",
+    ["https://example.com/tools"],
+    {
+      timeRange: { from: "2026-01-01", to: "2026-06-07" },
+      contentTypes: ["pdf", "dataset"],
+      sourceScope: {
+        domains: ["official.example"],
+        excludeDomains: ["spam.example"],
+        sourceTypes: ["official", "dataset"],
+      },
+      languages: ["zh"],
+    },
+  );
+  const queryTexts = plan.queries.map((query) => query.text).join("\n");
+
+  assert.equal(plan.freshness, "historical");
+  assert.deepEqual(plan.languages, ["zh"]);
+  assert.ok(queryTexts.includes("after:2026-01-01 before:2026-06-07"));
+  assert.ok(queryTexts.includes("filetype:pdf"));
+  assert.ok(queryTexts.includes("dataset"));
+  assert.ok(queryTexts.includes("site:official.example"));
+  assert.ok(queryTexts.includes("-site:spam.example"));
+  assert.ok(plan.requiredSourceTypes.includes("dataset"));
+}
+
 function testReportGeneration() {
   const report = generateMarkdownReport({
     id: "job-1",
@@ -171,6 +303,7 @@ function testReportGeneration() {
     seedUrls: [],
     status: "active",
     budget: normalizeResearchBudget(),
+    constraints: {},
     queryPlan: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -182,11 +315,31 @@ function testReportGeneration() {
     explanation: "Policy change",
     relevanceScore: 0.9,
     entities: ["BIS"],
-  }]);
+  }], {
+    supportedClaims: 1,
+    contradictedClaims: 0,
+    uncertainClaims: 0,
+    unverifiedClaims: 0,
+    supportingRelations: 1,
+    conflictingRelations: 0,
+  }, {
+    passed: true,
+    totalClaims: 1,
+    supportedClaims: 1,
+    contradictedClaims: 0,
+    uncertainClaims: 0,
+    unverifiedClaims: 0,
+    claimsWithEvidence: 1,
+    claimsWithoutEvidence: 0,
+    orphanEvidence: 0,
+    issues: [],
+  });
 
   assert.equal(report.status, "ready");
   assert.ok(report.markdown.includes("AI chip export controls"));
   assert.ok(report.markdown.includes("https://example.com/report"));
+  assert.ok(report.markdown.includes("证据质量门通过"));
+  assert.ok(report.markdown.includes("- 证据质量门: passed"));
 
   const notReady = generateMarkdownReport({
     id: "job-empty",
@@ -194,6 +347,7 @@ function testReportGeneration() {
     seedUrls: [],
     status: "active",
     budget: normalizeResearchBudget(),
+    constraints: {},
     queryPlan: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -220,18 +374,563 @@ function testResearchQueueNames() {
   ]);
 }
 
+function testResearchSchemaCreatesReferencedTablesBeforeRelations() {
+  const source = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const evidenceItemsIndex = source.indexOf("CREATE TABLE IF NOT EXISTS evidence_items");
+  const evidenceRelationsIndex = source.indexOf("CREATE TABLE IF NOT EXISTS evidence_relations");
+
+  assert.ok(evidenceItemsIndex > -1, "research schema should create evidence_items");
+  assert.ok(evidenceRelationsIndex > -1, "research schema should create evidence_relations");
+  assert.ok(
+    evidenceItemsIndex < evidenceRelationsIndex,
+    "fresh Postgres schema must create evidence_items before evidence_relations references it",
+  );
+}
+
+function testStructuredResearchPlanPersistenceIsWired() {
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const runSource = readFileSync(new URL("./run.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const workflowPanelsSource = readFileSync(new URL("../../components/research/RunWorkflowPanels.tsx", import.meta.url), "utf8");
+
+  assert.ok(storeSource.includes("export async function addResearchPlan"), "store should persist full research plans");
+  assert.ok(storeSource.includes("export async function listPlannedQueriesForRun"), "store should list planned queries");
+  assert.ok(storeSource.includes("scopedPlannedQueryId"), "planner query ids should be scoped per run before persistence");
+  assert.ok(storeSource.includes("return `${runId}-${queryId}`"), "planner query ids should not collide globally across runs");
+  assert.ok(runSource.includes("createDefaultDiscoveryProviders(getResearchConfig())"), "run discovery should use the provider registry");
+  assert.ok(runSource.includes("await addResearchPlan({ jobId: job.id, runId, plan })"), "run discovery should write structured plan artifacts");
+  assert.ok(routesSource.includes('router.get("/runs/:runId/plan"'), "API should expose run plan and planned queries");
+  assert.ok(panelSource.includes("QueryPlanPanel"), "Research UI should mount the structured query plan panel");
+  assert.ok(workflowPanelsSource.includes("export const QueryPlanPanel"), "Research UI should surface the structured query plan");
+  assert.ok(panelSource.includes("plannedQueries"), "Research UI should render planned query rows");
+}
+
+function testResearchE2eUsesOfflineDiscoveryMode() {
+  const registrySource = readFileSync(new URL("./discovery/registry.ts", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/research-e2e-smoke.mjs", import.meta.url), "utf8");
+  const analysisSource = readFileSync(new URL("./analysis.ts", import.meta.url), "utf8");
+
+  assert.ok(registrySource.includes("RESEARCH_DISCOVERY_OFFLINE_ONLY"), "provider registry should expose a deterministic offline discovery mode");
+  assert.ok(
+    registrySource.includes("if (process.env.RESEARCH_DISCOVERY_OFFLINE_ONLY === \"true\")") &&
+    registrySource.includes("createSeedUrlProvider(),"),
+    "offline discovery should keep a seed-url-only provider set",
+  );
+  assert.ok(smokeSource.includes("RESEARCH_DISCOVERY_OFFLINE_ONLY"), "research e2e smoke should run without external provider dependency");
+  assert.ok(smokeSource.includes("OPENAI_API_KEY: \"\""), "research e2e smoke should not depend on external AI providers");
+  assert.ok(smokeSource.includes("isolatedRedisUrl"), "research e2e smoke should isolate Redis queues from local development state");
+  assert.ok(analysisSource.includes("fallbackResearchAnalysis"), "research analysis should fall back when AI providers fail");
+  assert.ok(smokeSource.includes("sourceTypes: [\"official\"]"), "research e2e smoke should constrain discovery to local official seed sources");
+}
+
+function testUiSmokeDoesNotConsumeResearchQueues() {
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+
+  assert.ok(smokeSource.includes("REDIS_URL: \"\""), "UI smoke should not start research workers against real Redis queues");
+  assert.ok(smokeSource.includes("DATABASE_URL: \"\""), "UI smoke should not depend on real Research/Postgres state");
+}
+
+function testExtractedTablePersistenceIsIdempotentAndVisible() {
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const runSource = readFileSync(new URL("./run.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const sourceExplorerSource = readFileSync(new URL("../../components/research/SourceExplorerPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+
+  assert.ok(storeSource.includes("table_index INTEGER NOT NULL"), "extracted_tables should persist table order");
+  assert.ok(storeSource.includes("UNIQUE(document_id, table_index)"), "table persistence must be idempotent per document/index");
+  assert.ok(storeSource.includes("export async function upsertExtractedTable"), "store should upsert extracted tables");
+  assert.ok(runSource.includes("upsertExtractedTable"), "fetch stage should persist extracted tables through an upsert");
+  assert.ok(runSource.includes("tableIndex: index"), "fetch stage should pass deterministic table index");
+  assert.ok(routesSource.includes('router.get("/runs/:runId/tables"'), "API should expose extracted tables for a run");
+  assert.ok(panelSource.includes("<SourceExplorer"), "Research UI should mount the source explorer");
+  assert.ok(sourceExplorerSource.includes("ExtractedTablesPreview"), "Research UI should show extracted table previews");
+  assert.ok(smokeSource.includes("/api/research/runs/smoke-run/tables"), "Playwright smoke should mock extracted tables deterministically");
+  assert.ok(smokeSource.includes("工具对比"), "Playwright smoke should assert rendered extracted table content");
+}
+
+function testEvidenceGraphUiIsWired() {
+  const sharedTypesSource = readFileSync(new URL("../../types.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(sharedTypesSource.includes("export interface EvidenceRelationSummary"), "frontend types should include evidence relation rows");
+  assert.ok(sharedTypesSource.includes("export interface EvidenceGraphSummary"), "frontend types should include evidence graph summary counters");
+  assert.ok(panelSource.includes("/api/research/runs/${run.id}/graph"), "Research UI should load the run evidence graph endpoint");
+  assert.ok(panelSource.includes("EvidenceGraphPanel"), "Research UI should render an evidence graph panel");
+  assert.ok(panelSource.includes("graphRelations"), "Research UI should store/render graph relations");
+  assert.ok(smokeSource.includes("/api/research/runs/smoke-run/graph"), "Playwright smoke should mock the graph endpoint");
+  assert.ok(smokeSource.includes("证据图谱"), "Playwright smoke should assert the evidence graph panel");
+  assert.ok(readmeSource.includes("Evidence Graph"), "README should describe the frontend evidence graph surface");
+}
+
+function testDocumentLinksArePersistentAndVisible() {
+  const backendTypesSource = readFileSync(new URL("./types.ts", import.meta.url), "utf8");
+  const sharedTypesSource = readFileSync(new URL("../../types.ts", import.meta.url), "utf8");
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const runSource = readFileSync(new URL("./run.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const sourceExplorerSource = readFileSync(new URL("../../components/research/SourceExplorerPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(backendTypesSource.includes("export interface DocumentLinkRecord"), "backend types should include persisted document links");
+  assert.ok(sharedTypesSource.includes("export interface DocumentLinkSummary"), "frontend types should include document link summaries");
+  assert.ok(storeSource.includes("UNIQUE(document_id, url)"), "document_links should be idempotent per source document/url");
+  assert.ok(storeSource.includes("export async function upsertDocumentLink"), "store should upsert extracted document links");
+  assert.ok(storeSource.includes("export async function listDocumentLinksForRun"), "store should list document links by run");
+  assert.ok(runSource.includes("await saveDocumentLinks"), "fetch stage should persist extracted links before/while enqueueing frontier");
+  assert.ok(routesSource.includes('router.get("/runs/:runId/links"'), "API should expose extracted links for a run");
+  assert.ok(panelSource.includes("/api/research/runs/${run.id}/links"), "Research UI should load run document links");
+  assert.ok(panelSource.includes("<SourceExplorer"), "Research UI should mount the source explorer");
+  assert.ok(sourceExplorerSource.includes("DocumentLinksPreview"), "Source Explorer should render discovered links for the selected source");
+  assert.ok(smokeSource.includes("/api/research/runs/smoke-run/links"), "Playwright smoke should mock discovered links deterministically");
+  assert.ok(smokeSource.includes("发现外链"), "Playwright smoke should assert the discovered links panel");
+  assert.ok(readmeSource.includes("/api/research/runs/:runId/links"), "README should document the run links API");
+}
+
+function testManualRunIterationControlsAreWired() {
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(storeSource.includes("export async function appendPlannedQueryForRun"), "store should append a manual planned query without replacing the plan");
+  assert.ok(storeSource.includes("export async function resetFailedFrontierItemsForRun"), "store should reset failed/skipped frontier items for retry");
+  assert.ok(routesSource.includes('router.post("/runs/:runId/queries"'), "API should expose manual query append");
+  assert.ok(routesSource.includes('router.post("/runs/:runId/retry-failed"'), "API should expose failed frontier retry");
+  assert.ok(routesSource.includes('attemptReason: "manual"'), "manual query append should enqueue discovery as a manual attempt");
+  assert.ok(routesSource.includes('attemptReason: "retry"'), "retry-failed should enqueue fetch as a retry attempt");
+  assert.ok(panelSource.includes("ManualRunControls"), "Research UI should render run-level manual iteration controls");
+  assert.ok(panelSource.includes("/api/research/runs/${selectedRun.id}/queries"), "Research UI should call manual query append endpoint");
+  assert.ok(panelSource.includes("/api/research/runs/${selectedRun.id}/retry-failed"), "Research UI should call retry-failed endpoint");
+  assert.ok(smokeSource.includes("/api/research/runs/smoke-run/queries"), "Playwright smoke should mock manual query append");
+  assert.ok(smokeSource.includes("/api/research/runs/smoke-run/retry-failed"), "Playwright smoke should mock retry-failed");
+  assert.ok(smokeSource.includes("追加查询"), "Playwright smoke should assert the append query control");
+  assert.ok(smokeSource.includes("重试失败项"), "Playwright smoke should assert the retry-failed control");
+  assert.ok(readmeSource.includes("/api/research/runs/:runId/queries"), "README should document manual query append");
+  assert.ok(readmeSource.includes("/api/research/runs/:runId/retry-failed"), "README should document failed frontier retry");
+}
+
+function testRunClaimsApiIsWired() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('router.get("/runs/:runId/claims"'), "API should expose a dedicated run claims endpoint");
+  assert.ok(panelSource.includes("/api/research/runs/${run.id}/claims"), "Research UI should load the dedicated run claims endpoint");
+  assert.ok(panelSource.includes("ClaimsPanel"), "Research UI should render a claims-focused panel");
+  assert.ok(smokeSource.includes("/api/research/runs/smoke-run/claims"), "Playwright smoke should mock the claims endpoint");
+  assert.ok(smokeSource.includes("结论索引"), "Playwright smoke should assert the claims panel");
+  assert.ok(readmeSource.includes("/api/research/runs/:runId/claims"), "README should document the run claims API");
+}
+
+function testResearchRuntimeMonitorUiIsWired() {
+  const sharedTypesSource = readFileSync(new URL("../../types.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(sharedTypesSource.includes("export interface ResearchQueueStatusSummary"), "frontend types should include research queue status summaries");
+  assert.ok(sharedTypesSource.includes("export interface ProviderHealthSummary"), "frontend types should include provider health summaries");
+  assert.ok(routesSource.includes('router.get("/queues"'), "API should expose research queue health");
+  assert.ok(routesSource.includes('router.get("/providers/health"'), "API should expose global provider health");
+  assert.ok(panelSource.includes("/api/research/queues"), "Research UI should load global queue status");
+  assert.ok(panelSource.includes("/api/research/providers/health"), "Research UI should load global provider health");
+  assert.ok(panelSource.includes("RuntimeMonitorPanel"), "Research UI should render a runtime monitor panel");
+  assert.ok(smokeSource.includes("/api/research/queues"), "Playwright smoke should mock queue status");
+  assert.ok(smokeSource.includes("/api/research/providers/health"), "Playwright smoke should mock provider health");
+  assert.ok(smokeSource.includes("运行监控"), "Playwright smoke should assert the runtime monitor panel");
+  assert.ok(smokeSource.includes("Provider 健康"), "Playwright smoke should assert provider health output");
+  assert.ok(readmeSource.includes("运行监控"), "README should describe runtime monitoring in the Research UI");
+}
+
+function testSourceExplorerFetchDiagnosticsAreVisible() {
+  const backendTypesSource = readFileSync(new URL("./types.ts", import.meta.url), "utf8");
+  const sharedTypesSource = readFileSync(new URL("../../types.ts", import.meta.url), "utf8");
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const crawlerSource = readFileSync(new URL("./crawler.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const sourceExplorerSource = readFileSync(new URL("../../components/research/SourceExplorerPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(backendTypesSource.includes("metadata?: CrawlDocumentMetadata"), "backend crawl documents should carry fetch diagnostics metadata");
+  assert.ok(sharedTypesSource.includes("metadata?: ResearchDocumentMetadataSummary"), "frontend document summaries should expose fetch diagnostics metadata");
+  assert.ok(storeSource.includes("metadata JSONB NOT NULL DEFAULT '{}'"), "research schema should persist crawl document metadata");
+  assert.ok(storeSource.includes("document.metadata ?? {}"), "crawl document upsert should write metadata");
+  assert.ok(crawlerSource.includes("readerPath"), "crawler should record the selected reader path");
+  assert.ok(crawlerSource.includes("diagnostics"), "crawler should record fetch diagnostics");
+  assert.ok(panelSource.includes("<SourceExplorer"), "Research UI should mount the source explorer");
+  assert.ok(sourceExplorerSource.includes("SourceDiagnosticsPanel"), "Source Explorer should render fetch diagnostics");
+  assert.ok(sourceExplorerSource.includes("读取路径"), "Source Explorer should label the reader path in Chinese");
+  assert.ok(sourceExplorerSource.includes("诊断结果"), "Source Explorer should label diagnostics in Chinese");
+  assert.ok(smokeSource.includes("读取路径"), "Playwright smoke should assert the reader path output");
+  assert.ok(smokeSource.includes("诊断结果"), "Playwright smoke should assert diagnostics output");
+  assert.ok(readmeSource.includes("读取路径"), "README should document Source Explorer diagnostics");
+}
+
+function testProviderPanelShowsDataSourceCoverage() {
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const frontierProviderSource = readFileSync(new URL("../../components/research/FrontierProviderPanels.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(panelSource.includes("ProviderPanel"), "Research UI should mount the provider panel");
+  assert.ok(frontierProviderSource.includes("DataSourceCoveragePanel"), "Provider Panel should summarize data source coverage");
+  assert.ok(frontierProviderSource.includes("ProviderDetailRows"), "Provider Panel should render provider detail rows");
+  assert.ok(panelSource.includes("onOpenDataLab"), "Provider Panel should expose a Data Lab navigation callback");
+  assert.ok(panelSource.includes("打开 Data Lab"), "Provider Panel should render a Data Lab navigation button");
+  assert.ok(panelSource.includes("数据源覆盖"), "Provider Panel should label data source coverage in Chinese");
+  assert.ok(frontierProviderSource.includes("data-catalog"), "Provider Panel should expose data catalog provider types");
+  assert.ok(frontierProviderSource.includes("structured-api"), "Provider Panel should expose structured API provider types");
+  assert.ok(frontierProviderSource.includes("competition-data"), "Provider Panel should expose competition data provider types");
+  assert.ok(smokeSource.includes("/打开\\s*Data Lab/"), "Playwright smoke should assert the Data Lab navigation entry");
+  assert.ok(smokeSource.includes("回到 Research run"), "Playwright smoke should assert round-trip navigation from Data Lab");
+  assert.ok(smokeSource.includes("数据源覆盖"), "Playwright smoke should assert data source coverage output");
+  assert.ok(smokeSource.includes("data-catalog"), "Playwright smoke should assert data catalog provider type output");
+  assert.ok(smokeSource.includes("structured-api"), "Playwright smoke should assert structured API provider type output");
+  assert.ok(smokeSource.includes("competition-data"), "Playwright smoke should assert competition data provider type output");
+  assert.ok(readmeSource.includes("数据源覆盖"), "README should document provider data source coverage");
+}
+
+function testFrontierScoreExplainabilityIsPersistedAndVisible() {
+  const backendTypesSource = readFileSync(new URL("./types.ts", import.meta.url), "utf8");
+  const sharedTypesSource = readFileSync(new URL("../../types.ts", import.meta.url), "utf8");
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const queueSource = readFileSync(new URL("./frontier/queue.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const frontierProviderSource = readFileSync(new URL("../../components/research/FrontierProviderPanels.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const readmeSource = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+
+  assert.ok(backendTypesSource.includes("export interface FrontierScoreBreakdown"), "backend types should expose frontier score breakdown");
+  assert.ok(sharedTypesSource.includes("export interface FrontierScoreBreakdownSummary"), "frontend types should expose frontier score breakdown");
+  assert.ok(storeSource.includes("score_breakdown JSONB NOT NULL DEFAULT '{}'"), "fresh schema should persist frontier score breakdown");
+  assert.ok(storeSource.includes("ALTER TABLE frontier_items ADD COLUMN IF NOT EXISTS score_breakdown JSONB NOT NULL DEFAULT '{}'"), "schema migration should add score_breakdown to existing frontier tables");
+  assert.ok(queueSource.includes("scoreFrontierItemBreakdown"), "frontier queue should compute score explainability while enqueueing");
+  assert.ok(panelSource.includes("FrontierPanel"), "Research UI should mount the frontier panel");
+  assert.ok(frontierProviderSource.includes("FrontierScoreBreakdownView"), "Frontier UI should render score explainability rows");
+  for (const label of ["评分解释", "主题相关", "来源权威", "原始来源", "新鲜度", "来源多样性", "上下文质量", "权重"]) {
+    assert.ok(panelSource.includes(label) || frontierProviderSource.includes(label), `Frontier UI should include Chinese label: ${label}`);
+    assert.ok(smokeSource.includes(label), `Playwright smoke should assert rendered score label: ${label}`);
+  }
+  assert.ok(smokeSource.includes("scoreBreakdown"), "Playwright smoke should mock frontier score breakdown data");
+  assert.ok(readmeSource.includes("Frontier 评分解释"), "README should document frontier score explainability");
+  assert.ok(readmeSource.includes("主题相关度 25%"), "README should document fixed frontier scoring weights");
+}
+
+function testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets() {
+  const audit = getResearchCapabilityAudit({
+    DATABASE_URL: "postgres://local/politistream",
+    REDIS_URL: "redis://127.0.0.1:6379/0",
+    BRAVE_API_KEY: "brave-real-key-12345",
+    SERPAPI_API_KEY: "",
+    TAVILY_API_KEY: "tavily-real-key-12345",
+    NEWSAPI_KEY: "",
+    GITHUB_TOKEN: "github-real-token-12345",
+    KAGGLE_USERNAME: "demo",
+    KAGGLE_KEY: "kaggle-real-key-12345",
+    FRED_API_KEY: "fred-real-key-12345",
+    OPENAI_API_KEY: "openai-real-key-12345",
+  });
+
+  assert.equal(audit.storage.ready, true, "capability audit should mark Postgres storage ready from DATABASE_URL");
+  assert.equal(audit.queue.ready, true, "capability audit should mark Redis queue ready from REDIS_URL");
+  assert.ok(audit.searchProviders.some((provider) => provider.name === "brave" && provider.configured), "audit should expose configured Brave search");
+  assert.ok(audit.searchProviders.some((provider) => provider.name === "serpapi" && !provider.configured), "audit should expose missing SerpApi key");
+  assert.ok(audit.dataProviders.some((provider) => provider.name === "kaggle" && provider.configured), "audit should expose configured Kaggle data provider");
+  assert.ok(audit.dataProviders.some((provider) => provider.name === "sports"), "audit should expose sports data provider");
+  assert.ok(audit.dataProviders.length >= 14, "audit should expose every implemented data provider");
+  assert.ok(audit.extractors.some((extractor) => extractor.name === "pdf" && extractor.coverage === "implemented"), "audit should expose PDF extractor readiness");
+  assert.ok(audit.pressureTargets.some((target) => target.mode === "Deep" && target.maxUrlsPerRun === 500), "audit should expose the Deep 500 URL pressure target");
+  assert.ok(audit.frontendSurfaces.includes("Source Explorer"), "audit should list Source Explorer as a visible surface");
+  assert.ok(audit.envChecklist.some((item) => item.name === "DATABASE_URL" && item.configured && item.requiredLevel === "required"), "audit should expose required DATABASE_URL env");
+  assert.ok(audit.envChecklist.some((item) => item.name === "BRAVE_API_KEY" && item.configured && item.requiredLevel === "at-least-one"), "audit should expose configured search env");
+  assert.ok(audit.envChecklist.some((item) => item.name === "SERPAPI_API_KEY" && !item.configured && item.requiredFor100), "audit should expose missing search env");
+  assert.ok(audit.envChecklist.some((item) => item.name === "OPENAI_API_KEY" && item.configured && item.group === "ai"), "audit should expose AI env");
+  assert.ok(audit.envChecklist.every((item) => !("value" in item)), "audit must not expose secret env values");
+  assert.ok(audit.extractorSamples.some((item) => item.name === "structured-data"), "audit should expose structured-data extractor sample");
+  assert.ok(audit.extractorSamples.length >= 8, "audit should expose every extractor sample");
+  assert.ok(audit.frontendSurfaces.includes("Agent Console"), "audit should list Agent Console as a visible surface");
+  assert.ok(audit.frontendSurfaces.includes("自然语言调度"), "audit should list natural language dispatch as a visible surface");
+  assert.ok(audit.compatibilityApis.some((api) => api.path === "/api/datasets/:id/validate"), "audit should expose compatibility API checks");
+  assert.ok(audit.exportArtifacts.some((artifact) => artifact.format === "pptx"), "audit should expose PPTX export artifact checks");
+  assert.ok(audit.remainingGates.includes("真实 provider 联网 smoke"), "audit should keep external provider smoke as an explicit remaining gate");
+}
+
+function testResearchCapabilityAuditApiAndUiAreWired() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('router.get("/capabilities"'), "Research API should expose capability readiness");
+  assert.ok(routesSource.includes('router.post("/capabilities/sample-acceptance"'), "Research API should expose sample acceptance");
+  assert.ok(routesSource.includes('router.post("/capabilities/enhanced-fetch-smoke"'), "Research API should expose enhanced fetch smoke");
+  assert.ok(panelSource.includes("/api/research/capabilities"), "Research UI should load capability readiness");
+  assert.ok(panelSource.includes("/api/research/capabilities/sample-acceptance"), "Research UI should call sample acceptance");
+  assert.ok(panelSource.includes("/api/research/capabilities/enhanced-fetch-smoke"), "Research UI should call enhanced fetch smoke");
+  assert.ok(panelSource.includes("CapabilityAuditPanel"), "Research UI should render capability audit panel");
+  assert.ok(panelSource.includes("envChecklist"), "Research UI should pass capability env checklist");
+  assert.ok(!readFileSync(new URL("../../components/research/CapabilityAuditPanel.tsx", import.meta.url), "utf8").includes("dataProviders.slice(0, 8)"), "Capability audit should render all data providers");
+  assert.ok(smokeSource.includes("/api/research/capabilities"), "UI smoke should mock capability readiness");
+  assert.ok(smokeSource.includes("/api/research/capabilities/sample-acceptance"), "UI smoke should mock sample acceptance");
+  assert.ok(smokeSource.includes("/api/research/capabilities/enhanced-fetch-smoke"), "UI smoke should mock enhanced fetch smoke");
+  assert.ok(smokeSource.includes("能力验收台"), "UI smoke should assert capability audit panel");
+  assert.ok(smokeSource.includes("样本验收"), "UI smoke should assert sample acceptance panel");
+  assert.ok(smokeSource.includes("运行新闻溯源样本"), "UI smoke should assert news sample acceptance action");
+  assert.ok(smokeSource.includes("运行数据处理样本"), "UI smoke should assert data sample acceptance action");
+  assert.ok(smokeSource.includes("Extractor 逐类型样本"), "UI smoke should assert extractor sample matrix");
+  assert.ok(smokeSource.includes("运行增强抓取 smoke"), "UI smoke should assert enhanced fetch smoke action");
+  assert.ok(smokeSource.includes("兼容 API 验收"), "UI smoke should assert compatibility API panel");
+  assert.ok(smokeSource.includes("导出产物验收"), "UI smoke should assert export artifact panel");
+  assert.ok(smokeSource.includes("Agent Console"), "UI smoke should assert Agent Console capability surface");
+  assert.ok(smokeSource.includes("Env 配置清单"), "UI smoke should assert env checklist visibility");
+  assert.ok(smokeSource.includes("BRAVE_API_KEY"), "UI smoke should assert search env visibility");
+  assert.ok(smokeSource.includes("OPENAI_API_KEY"), "UI smoke should assert AI env visibility");
+  assert.ok(smokeSource.includes("Deep / 500 URL"), "UI smoke should assert Deep pressure visibility");
+}
+
+async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
+  const result = await runProviderLiveSmoke({
+    topic: "document conversion tools",
+    config: {
+      aiModel: "test",
+      browserProvider: "local",
+      braveApiKey: "configured-key",
+      serpApiKey: "",
+      tavilyApiKey: "",
+      newsApiKey: "",
+    },
+    searchFn: async () => [
+      {
+        provider: "brave",
+        enabled: true,
+        candidates: [
+          {
+            jobId: "live-smoke",
+            provider: "brave",
+            query: "document conversion tools",
+            url: "https://pandoc.org",
+            canonicalUrl: "https://pandoc.org/",
+            title: "Pandoc",
+            snippet: "Universal markup converter",
+            depth: 0,
+          },
+        ],
+      },
+      { provider: "serpapi", enabled: false, candidates: [], error: "provider_api_key_missing" },
+    ],
+  });
+
+  assert.equal(result.topic, "document conversion tools");
+  assert.equal(result.totalCandidates, 1);
+  assert.ok(result.providers.some((provider) => provider.provider === "brave" && provider.status === "passed"));
+  assert.ok(result.providers.some((provider) => provider.provider === "serpapi" && provider.status === "skipped"));
+}
+
+function testPressureSmokeExposesStandardAndDeepBudgets() {
+  const result = runPressureSmoke("新闻溯源和文档转换工具调研");
+
+  assert.ok(result.targets.some((target) => target.mode === "Standard" && target.maxUrlsPerRun === 150));
+  assert.ok(result.targets.some((target) => target.mode === "Deep" && target.maxUrlsPerRun === 500));
+  assert.ok(result.targets.every((target) => target.plannedQueries > 0), "pressure smoke should plan queries for every target");
+  assert.ok(result.targets.every((target) => target.estimatedFrontierCapacity >= target.maxUrlsPerRun), "pressure smoke should estimate enough frontier capacity");
+}
+
+async function testDataSourceLiveSmokeUsesPublicDiscoveryProviders() {
+  const result = await runDataSourceLiveSmoke({
+    topic: "public climate dataset csv",
+    providers: [
+      {
+        name: "ckan",
+        type: "data-catalog",
+        enabled: () => true,
+        discover: async () => [
+          {
+            jobId: "data-source-smoke",
+            runId: "data-source-smoke",
+            provider: "ckan",
+            providerType: "data-catalog",
+            queryId: "data-source-smoke-query",
+            query: "public climate dataset csv",
+            url: "https://catalog.data.gov/dataset/climate",
+            canonicalUrl: "https://catalog.data.gov/dataset/climate",
+            title: "Climate dataset",
+            snippet: "CSV public dataset",
+            rank: 1,
+            depth: 0,
+            sourceType: "data-catalog",
+            discoveredAt: "2026-06-08T00:00:00.000Z",
+          },
+        ],
+      },
+      {
+        name: "openalex",
+        type: "structured-api",
+        enabled: () => true,
+        discover: async () => [],
+      },
+    ],
+  });
+
+  assert.equal(result.totalCandidates, 1);
+  assert.ok(result.providers.some((provider) => provider.provider === "ckan" && provider.status === "passed"));
+  assert.ok(result.providers.some((provider) => provider.provider === "openalex" && provider.status === "failed"));
+}
+
+function testCapabilitySmokeApiAndUiAreWired() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../../components/research/CapabilityAuditPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+  const packageSource = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('router.post("/capabilities/provider-smoke"'), "Research API should expose provider live smoke");
+  assert.ok(routesSource.includes('router.post("/capabilities/data-source-smoke"'), "Research API should expose data source live smoke");
+  assert.ok(routesSource.includes('router.post("/capabilities/pressure-smoke"'), "Research API should expose pressure smoke");
+  assert.ok(routesSource.includes("getLatestSmokeEvidence"), "Research capabilities API should include latest smoke evidence");
+  assert.ok(panelSource.includes("onRunProviderSmoke"), "Capability audit panel should expose provider smoke action");
+  assert.ok(panelSource.includes("onRunDataSourceSmoke"), "Capability audit panel should expose data source smoke action");
+  assert.ok(panelSource.includes("onRunPressureSmoke"), "Capability audit panel should expose pressure smoke action");
+  assert.ok(panelSource.includes("lastSmoke"), "Capability audit panel should render persisted smoke evidence");
+  assert.ok(smokeSource.includes("/api/research/capabilities/provider-smoke"), "UI smoke should mock provider smoke action");
+  assert.ok(smokeSource.includes("/api/research/capabilities/data-source-smoke"), "UI smoke should mock data source smoke action");
+  assert.ok(smokeSource.includes("/api/research/capabilities/pressure-smoke"), "UI smoke should mock pressure smoke action");
+  assert.ok(smokeSource.includes("运行 Provider smoke"), "UI smoke should assert provider smoke button");
+  assert.ok(smokeSource.includes("运行数据源 smoke"), "UI smoke should assert data source smoke button");
+  assert.ok(smokeSource.includes("运行 Deep 压测"), "UI smoke should assert pressure smoke button");
+  assert.ok(packageSource.includes("smoke:research-capabilities"), "package scripts should expose a CLI research capability smoke");
+  assert.ok(readFileSync(new URL("../../../scripts/research-capability-smoke.mjs", import.meta.url), "utf8").includes("persistSmokeEvidence"), "CLI smoke should persist evidence");
+}
+
+async function testResearchSampleAcceptanceUsesRealWorkerContract() {
+  const runner = async ({ command, rows }: { command: string; rows: Array<Record<string, unknown>> }) => {
+    assert.ok(rows.length >= 5, "sample acceptance should send meaningful sample rows to the worker");
+    const results: Record<string, Record<string, unknown>> = {
+      news: { documentCount: rows.length, clusters: [{}], timeline: [{}, {}, {}], sourceProfiles: [{}, {}, {}], conflictSignals: [] },
+      profile: { columns: [{}] },
+      stats: { numericColumns: [{}], correlations: [] },
+      quality: { profile: {}, quality: {}, checks: [] },
+      regression: { model: {} },
+      logistic: { model: {} },
+      poisson: { model: {} },
+      dimension: { pca: {} },
+      cluster: { clusterCounts: { A: 2 } },
+      anomaly: { anomalies: [] },
+      timeseries: { timeline: [] },
+      text: { keywords: [] },
+      deepml: { torch: {} },
+      geo: { geojson: {} },
+      chart: { files: { png: "/tmp/chart.png" } },
+      report: { markdown: "# Report" },
+      export: { files: { md: "/tmp/report.md", docx: "/tmp/report.docx", pdf: "/tmp/report.pdf", pptx: "/tmp/report.pptx" } },
+    };
+    return {
+      command,
+      engine: "python-worker" as const,
+      result: results[command] ?? {},
+      durationMs: 1,
+    };
+  };
+
+  const news = await runResearchSampleAcceptance({ kind: "news-trace", runner: runner as any });
+  assert.equal(news.status, "passed");
+  assert.ok(news.checks.some((item) => item.id === "news-source-quality" && item.status === "passed"));
+
+  const data = await runResearchSampleAcceptance({ kind: "data-processing", runner: runner as any });
+  assert.equal(data.status, "passed");
+  assert.ok(data.commands.includes("export"));
+  assert.ok(data.checks.some((item) => item.id === "report-export" && item.status === "passed"));
+}
+
+function testEnhancedFetchSmokeExposesOptionalProviders() {
+  const result = runEnhancedFetchSmoke({
+    RESEARCH_BROWSER_FETCH_ENABLED: "true",
+    FIRECRAWL_API_KEY: "",
+    CRAWL4AI_URL: "",
+    BROWSERLESS_URL: "",
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(result.passed, true);
+  assert.ok(result.rows.some((row) => row.provider === "http-fetcher" && row.status === "passed"));
+  assert.ok(result.rows.some((row) => row.provider === "browser-fallback" && row.status === "passed"));
+  assert.ok(result.rows.some((row) => row.provider === "firecrawl" && row.status === "skipped"));
+  assert.ok(result.rows.some((row) => row.provider === "crawl4ai" && row.status === "skipped"));
+  assert.ok(result.rows.some((row) => row.provider === "browserless" && row.status === "skipped"));
+}
+
+async function testSmokeEvidencePersistsLatestResult() {
+  const dir = mkdtempSync(path.join(tmpdir(), "politistream-smoke-evidence-"));
+  try {
+    const pressure = runPressureSmoke("文档转换工具和公开数据源");
+    const provider = await runProviderLiveSmoke({
+      topic: "文档转换工具和公开数据源",
+      searchFn: async () => [
+        { provider: "brave", enabled: false, candidates: [], error: "provider_api_key_missing" },
+      ],
+    });
+    const dataSource = await runDataSourceLiveSmoke({
+      topic: "文档转换工具和公开数据源",
+      providers: [{ name: "ckan", type: "data-catalog", enabled: () => true, discover: async () => [] }],
+    });
+    const evidence = persistSmokeEvidence({ provider, pressure, dataSource, dir });
+    const latest = getLatestSmokeEvidence(dir);
+
+    assert.equal(latest?.id, evidence.id);
+    assert.equal(latest?.provider?.providers[0].status, "skipped");
+    assert.equal(latest?.dataSource?.providers[0].provider, "ckan");
+    assert.equal(latest?.pressure?.targets.some((target) => target.mode === "Deep"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 testUrlCanonicalization();
 testBudgetLimits();
 testProviderNormalization();
 testDiscoveryCandidateNormalization();
+testAiProviderRouting();
 testFrontierPriorityScoring();
 testExtractorRoutingAndTableExtraction();
 testCredibilityAndEvidenceGraph();
+testDefaultDiscoveryProvidersIncludeDataSources();
 testPlannerClassifiesToolEvaluation();
+testPlannerClassifiesDataResearch();
+testPlannerClassifiesGenericDataResearch();
 testPlannerClassifiesVerification();
 testPlannerAddsSeedDomainQueries();
+testPlannerHonorsResearchConstraints();
 testReportGeneration();
 testRSSSourceUrlValidation();
 testResearchQueueNames();
+testResearchSchemaCreatesReferencedTablesBeforeRelations();
+testStructuredResearchPlanPersistenceIsWired();
+testResearchE2eUsesOfflineDiscoveryMode();
+testUiSmokeDoesNotConsumeResearchQueues();
+testExtractedTablePersistenceIsIdempotentAndVisible();
+testEvidenceGraphUiIsWired();
+testDocumentLinksArePersistentAndVisible();
+testManualRunIterationControlsAreWired();
+testRunClaimsApiIsWired();
+testResearchRuntimeMonitorUiIsWired();
+testSourceExplorerFetchDiagnosticsAreVisible();
+testProviderPanelShowsDataSourceCoverage();
+testFrontierScoreExplainabilityIsPersistedAndVisible();
+testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets();
+testResearchCapabilityAuditApiAndUiAreWired();
+await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();
+testPressureSmokeExposesStandardAndDeepBudgets();
+await testDataSourceLiveSmokeUsesPublicDiscoveryProviders();
+testCapabilitySmokeApiAndUiAreWired();
+await testResearchSampleAcceptanceUsesRealWorkerContract();
+testEnhancedFetchSmokeExposesOptionalProviders();
+await testSmokeEvidencePersistsLatestResult();
 
 console.log("research tests passed");

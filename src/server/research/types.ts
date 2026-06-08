@@ -1,25 +1,47 @@
 export type ResearchJobStatus = "active" | "paused" | "running" | "completed" | "failed";
 export type ResearchRunStatus = "queued" | "planning" | "discovery" | "frontier" | "fetching" | "extracting" | "analyzing" | "reporting" | "completed" | "failed" | "paused" | "cancelled";
-export type ProviderName = "brave" | "serpapi" | "tavily" | "rss" | "sitemap" | "github" | "npm" | "pypi" | "official";
-export type ResearchTaskType = "survey" | "verification" | "tool-evaluation" | "policy" | "technical" | "competitive" | "monitoring";
-export type SourceType = "official" | "mainstream-news" | "technical-doc" | "github" | "package-registry" | "academic" | "regulatory" | "community" | "benchmark" | "company" | "rss" | "sitemap" | "unknown";
-export type QueryPurpose = "overview" | "official-source" | "primary-source" | "news-coverage" | "contradiction" | "benchmark" | "community-feedback" | "technical-detail" | "pricing" | "timeline";
+export type ProviderName = "brave" | "serpapi" | "tavily" | "newsapi" | "rss" | "sitemap" | "github" | "npm" | "pypi" | "official" | "gdelt" | "wayback" | "commoncrawl" | "ckan" | "socrata" | "arcgis" | "kaggle" | "huggingface" | "openml" | "worldbank" | "fred" | "openalex" | "crossref" | "sports";
+export type ResearchTaskType = "survey" | "verification" | "tool-evaluation" | "policy" | "technical" | "competitive" | "monitoring" | "data-research" | "sports-analysis" | "analytics";
+export type SourceType = "official" | "mainstream-news" | "technical-doc" | "github" | "package-registry" | "academic" | "regulatory" | "community" | "benchmark" | "company" | "rss" | "sitemap" | "dataset" | "data-catalog" | "structured-api" | "archive" | "sports-data" | "geospatial" | "financial-data" | "unknown";
+export type QueryPurpose = "overview" | "official-source" | "primary-source" | "news-coverage" | "contradiction" | "benchmark" | "community-feedback" | "technical-detail" | "pricing" | "timeline" | "dataset-discovery" | "statistical-source" | "competition-data" | "sports-data" | "visualization";
 export type CrawlStatus = "queued" | "fetched" | "failed" | "blocked" | "skipped";
 export type DocumentMemoryStatus = "fresh" | "reused" | "stale";
 export type AnalysisStatus = "pending" | "analyzed" | "irrelevant" | "failed";
 export type ReportStatus = "not_ready" | "ready" | "failed";
-export type DiscoveryProviderType = "web-search" | "rss" | "sitemap" | "github" | "package-registry" | "official" | "community";
+export type DiscoveryProviderType = "web-search" | "rss" | "sitemap" | "github" | "package-registry" | "official" | "community" | "news-api" | "archive" | "data-catalog" | "structured-api" | "competition-data" | "sports-data";
 export type FrontierStatus = "queued" | "fetching" | "fetched" | "failed" | "skipped";
-export type ExtractorKind = "html" | "pdf" | "github" | "npm" | "pypi" | "sitemap" | "table";
+export type ExtractorKind = "html" | "pdf" | "github" | "npm" | "pypi" | "sitemap" | "table" | "csv" | "json" | "jsonl" | "parquet" | "excel" | "geojson" | "sdmx" | "xbrl" | "netcdf" | "docx" | "pptx" | "txt" | "md";
 export type AuthorityTier = "T0" | "T1" | "T2" | "T3" | "T4";
 export type EvidenceClaimStatus = "supported" | "contradicted" | "uncertain" | "unverified";
 export type EvidenceRelationKind = "supports" | "contradicts" | "mentions" | "derived_from";
+export type ResearchFreshness = "latest" | "historical" | "mixed";
 
 export interface ResearchBudget {
   maxDepth: number;
   maxUrlsPerRun: number;
   maxDomainsPerRun: number;
   runIntervalMinutes: number;
+}
+
+export interface ResearchTimeRangeConstraint {
+  from?: string;
+  to?: string;
+  freshness?: ResearchFreshness;
+}
+
+export interface ResearchSourceScopeConstraint {
+  domains?: string[];
+  excludeDomains?: string[];
+  sourceTypes?: SourceType[];
+}
+
+export interface ResearchConstraints {
+  timeRange?: ResearchTimeRangeConstraint;
+  contentTypes?: string[];
+  sourceScope?: ResearchSourceScopeConstraint;
+  languages?: string[];
+  includeKeywords?: string[];
+  excludeKeywords?: string[];
 }
 
 export interface PlannedQuery {
@@ -38,11 +60,12 @@ export interface ResearchPlan {
   claim?: string;
   subQuestions: string[];
   languages: string[];
-  freshness: "latest" | "historical" | "mixed";
+  freshness: ResearchFreshness;
   requiredSourceTypes: SourceType[];
   queries: PlannedQuery[];
   budget: ResearchBudget;
   stopConditions: string[];
+  constraints: ResearchConstraints;
 }
 
 export interface ResearchJob {
@@ -51,6 +74,7 @@ export interface ResearchJob {
   seedUrls: string[];
   status: ResearchJobStatus;
   budget: ResearchBudget;
+  constraints: ResearchConstraints;
   queryPlan: string[];
   nextRunAt?: string;
   createdAt: string;
@@ -123,6 +147,7 @@ export interface FrontierItem {
   depth: number;
   sourceType: SourceType;
   priorityScore: number;
+  scoreBreakdown?: FrontierScoreBreakdown;
   status: FrontierStatus;
   attempts: number;
   discoveredFromUrl?: string;
@@ -133,6 +158,24 @@ export interface FrontierItem {
   lastError?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface FrontierScoreBreakdown {
+  topicalRelevance: number;
+  sourceAuthority: number;
+  primarySourceLikelihood: number;
+  freshness: number;
+  sourceDiversity: number;
+  linkContextQuality: number;
+  weights: {
+    topicalRelevance: number;
+    sourceAuthority: number;
+    primarySourceLikelihood: number;
+    freshness: number;
+    sourceDiversity: number;
+    linkContextQuality: number;
+  };
+  finalScore: number;
 }
 
 export interface SearchCandidate {
@@ -166,6 +209,19 @@ export interface CrawlDocument {
   error?: string;
   fetchedAt?: string;
   memoryStatus?: DocumentMemoryStatus;
+  metadata?: CrawlDocumentMetadata;
+}
+
+export interface CrawlDocumentMetadata {
+  readerPath?: string;
+  fetcher?: string;
+  contentType?: string;
+  statusCode?: number;
+  durationMs?: number;
+  fallbackUsed?: boolean;
+  extractor?: ExtractorKind;
+  diagnostics?: string[];
+  [key: string]: unknown;
 }
 
 export interface DocumentAsset {
@@ -182,6 +238,18 @@ export interface DocumentAsset {
     sha256: string;
     [key: string]: unknown;
   };
+  createdAt?: string;
+}
+
+export interface DocumentLinkRecord {
+  id?: string;
+  jobId: string;
+  runId?: string;
+  documentId: string;
+  url: string;
+  text: string;
+  context?: string;
+  enqueued: boolean;
   createdAt?: string;
 }
 
@@ -258,6 +326,15 @@ export interface ExtractedTable {
   caption?: string;
   headers: string[];
   rows: string[][];
+}
+
+export interface ExtractedTableRecord extends ExtractedTable {
+  id?: string;
+  jobId: string;
+  runId?: string;
+  documentId: string;
+  tableIndex: number;
+  createdAt?: string;
 }
 
 export interface ExtractedDocument {

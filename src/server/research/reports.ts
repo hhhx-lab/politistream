@@ -1,4 +1,5 @@
 import { EvidenceItem, ResearchJob, ResearchReport } from "./types";
+import { EvidenceQualityGateResult } from "./evidence/graph";
 
 export interface ReportGraphSummary {
   supportedClaims: number;
@@ -13,6 +14,7 @@ export function generateMarkdownReport(
   job: ResearchJob,
   evidence: EvidenceItem[],
   graphSummary: ReportGraphSummary = emptyGraphSummary(),
+  qualityGate?: EvidenceQualityGateResult,
 ): ResearchReport {
   if (evidence.length === 0) {
     return {
@@ -32,6 +34,9 @@ export function generateMarkdownReport(
     "",
     `本报告基于 ${evidence.length} 条已分析证据、${sourceUrls.length} 个来源生成。`,
     `证据图谱包含 ${graphSummary.supportedClaims} 个已支持结论、${graphSummary.contradictedClaims} 个被反驳结论、${graphSummary.uncertainClaims} 个仍不确定结论。`,
+    qualityGate
+      ? `证据质量门${qualityGate.passed ? "通过" : "未通过"}：${qualityGate.claimsWithEvidence}/${qualityGate.totalClaims} 个结论已关联证据，孤立证据 ${qualityGate.orphanEvidence} 条。`
+      : "证据质量门未运行。",
     "",
     "## 关键结论",
     "",
@@ -85,6 +90,11 @@ export function generateMarkdownReport(
     `- 生成时间: ${generatedAt}`,
     `- 支持关系: ${graphSummary.supportingRelations}`,
     `- 冲突关系: ${graphSummary.conflictingRelations}`,
+    `- 证据质量门: ${qualityGate ? (qualityGate.passed ? "passed" : "failed") : "not_run"}`,
+    ...(qualityGate?.issues.length ? [
+      "- 质量门问题:",
+      ...qualityGate.issues.slice(0, 10).map((issue) => `  - ${issue}`),
+    ] : []),
   ];
 
   return {

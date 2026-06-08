@@ -20,6 +20,9 @@ import { sendResearchConfigStatus } from "./src/server/research/http";
 import { createResearchRouter } from "./src/server/research/routes";
 import { startResearchWorkers } from "./src/server/research/workers/worker";
 import { getServerRuntimeConfig } from "./src/server/runtime";
+import { createAnalyticsCompatibilityRouter, createAnalyticsRouter } from "./src/server/analytics/routes";
+import { createNewsAnalysisRouter } from "./src/server/analytics/newsAnalysis";
+import { createAgentRouter } from "./src/server/agent/routes";
 
 // ... (rest of imports)
 
@@ -27,7 +30,7 @@ const app = express();
 const runtime = getServerRuntimeConfig();
 
 app.use(createCorsMiddleware(runtime.appUrl));
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 
 // Initialize Database
 initDb();
@@ -60,6 +63,10 @@ app.get("/api/runtime/status", (req, res) => {
 
 app.get("/api/research/status", sendResearchConfigStatus);
 app.use("/api/research", createResearchRouter());
+app.use("/api/analytics", createAnalyticsRouter());
+app.use("/api", createAnalyticsCompatibilityRouter());
+app.use("/api/news-analysis", createNewsAnalysisRouter());
+app.use("/api/agent", createAgentRouter());
 
 function sendRSSSourceError(res: express.Response, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);

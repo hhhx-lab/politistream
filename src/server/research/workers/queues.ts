@@ -73,15 +73,21 @@ export async function enqueueResearchRun(runId: string, jobId: string) {
 export async function enqueueResearchStage(payload: ResearchStageJobPayload) {
   const queue = getResearchQueue(queueNameForStage(payload.stage));
   return queue.add(payload.stage, payload, {
-    jobId: `${payload.runId}:${payload.stage}`,
+    jobId: [payload.runId, payload.stage, payload.attemptReason, Date.now()].join("__"),
   });
 }
 
 export async function getQueueStatus() {
-  const queue = getResearchQueue(RESEARCH_QUEUE_NAMES.discovery);
-  const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
+  const entries = await Promise.all(
+    Object.entries(RESEARCH_QUEUE_NAMES).map(async ([stage, name]) => {
+      const queue = getResearchQueue(name);
+      const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
+      return [stage, counts] as const;
+    }),
+  );
+
   return {
     names: getResearchQueueNames(),
-    discovery: counts,
+    ...Object.fromEntries(entries),
   };
 }

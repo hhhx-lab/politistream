@@ -20,7 +20,7 @@ export function runResearchBenchmarks(fixtures: ResearchBenchmarkFixture[] = RES
 }
 
 function evaluateFixture(fixture: ResearchBenchmarkFixture): ResearchBenchmarkResult {
-  const plan = planResearch(fixture.topic, []);
+  const plan = planResearch(fixture.topic, [], {});
   const plannedSourceTypes = [...new Set(plan.queries.flatMap((query) => query.sourceTypes))];
   const coveredTypes = fixture.requiredSourceTypes.filter((type) => plannedSourceTypes.includes(type));
   const queryPurposes = new Set(plan.queries.map((query) => query.purpose));

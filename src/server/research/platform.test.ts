@@ -1,15 +1,16 @@
 import assert from "assert";
+import { readFileSync } from "fs";
 import { assetPathFor } from "./assets/rawAssetStore";
 import { aggregateProviderHealth, sortProvidersForQuery } from "./discovery/providerRegistry";
 import { normalizeProviderCapability } from "./discovery/providerTypes";
-import { buildEvidenceRelation, summarizeEvidenceGraph } from "./evidence/graph";
+import { buildEvidenceRelation, summarizeEvidenceGraph, validateEvidenceQualityGate } from "./evidence/graph";
 import { RESEARCH_BENCHMARK_FIXTURES } from "./evaluation/fixtures";
 import { createDomainLimiter, robotsAllowsPath, shouldRetryFetch } from "./fetchers/fetchPolicy";
 import { chooseFetcherKind } from "./fetchers/httpFetcher";
 import { shouldReuseDocument, topicFingerprint } from "./memory/researchMemory";
 import { normalizeDocumentSearchQuery } from "./search/documentIndex";
-import { RESEARCH_STAGES, nextStageFor } from "./workers/stageTypes";
-import { normalizeStageError, stageEventMessage } from "./workers/stageRunner";
+import { RESEARCH_STAGES, nextStageFor, resumeStageForRunStatus } from "./workers/stageTypes";
+import { normalizeStageError, shouldContinueAfterStage, shouldStartStage, stageEventMessage } from "./workers/stageRunner";
 import { getResearchQueueNames, queueNameForStage } from "./workers/queues";
 
 function testStageOrder() {
@@ -23,6 +24,14 @@ function testStageOrder() {
   ]);
   assert.equal(nextStageFor("discovery"), "frontier");
   assert.equal(nextStageFor("report"), "completed");
+  assert.equal(resumeStageForRunStatus("queued"), "discovery");
+  assert.equal(resumeStageForRunStatus("planning"), "discovery");
+  assert.equal(resumeStageForRunStatus("fetching"), "fetch");
+  assert.equal(resumeStageForRunStatus("extracting"), "extract");
+  assert.equal(resumeStageForRunStatus("analyzing"), "analyze");
+  assert.equal(resumeStageForRunStatus("reporting"), "report");
+  assert.equal(resumeStageForRunStatus("completed"), null);
+  assert.equal(resumeStageForRunStatus("cancelled"), null);
 }
 
 function testStageRunnerHelpers() {
@@ -30,6 +39,32 @@ function testStageRunnerHelpers() {
   assert.equal(normalizeStageError("plain failure"), "plain failure");
   assert.equal(stageEventMessage("fetch", "started"), "fetch started");
   assert.equal(stageEventMessage("fetch", "completed"), "fetch completed");
+  assert.equal(shouldStartStage({ status: "queued" }), true);
+  assert.equal(shouldStartStage({ status: "paused" }), false);
+  assert.equal(shouldStartStage({ status: "cancelled" }), false);
+  assert.equal(shouldContinueAfterStage({ status: "fetching" }), true);
+  assert.equal(shouldContinueAfterStage({ status: "paused" }), false);
+  assert.equal(shouldContinueAfterStage({ status: "cancelled" }), false);
+}
+
+function testWorkersStopChainingWhenRunStageStops() {
+  for (const file of [
+    "src/server/research/workers/discoveryWorker.ts",
+    "src/server/research/workers/frontierWorker.ts",
+    "src/server/research/workers/fetchWorker.ts",
+    "src/server/research/workers/extractWorker.ts",
+    "src/server/research/workers/analyzeWorker.ts",
+  ]) {
+    const source = readFileSync(file, "utf8");
+    assert.ok(
+      source.includes("const shouldContinue = await runStage"),
+      `${file} should capture runStage continuation state`,
+    );
+    assert.ok(
+      source.includes("if (!shouldContinue) return;"),
+      `${file} should not enqueue the next stage after pause/cancel/terminal status`,
+    );
+  }
 }
 
 function testQueueNameForStage() {
@@ -47,6 +82,9 @@ function testQueueNameForStage() {
     "research.analyze",
     "research.report",
   ]);
+  const queueSource = readFileSync("src/server/research/workers/queues.ts", "utf8");
+  assert.ok(!queueSource.includes("${payload.runId}:${payload.stage}"), "BullMQ custom jobId must not contain colon");
+  assert.ok(queueSource.includes(".join(\"__\")"), "Research stage jobId should use a BullMQ-safe separator");
 }
 
 function testFetchPolicy() {
@@ -133,6 +171,37 @@ function testEvidenceGraphSummary() {
   assert.equal(summary.conflictingRelations, 1);
 }
 
+function testEvidenceQualityGate() {
+  const passed = validateEvidenceQualityGate({
+    claims: [
+      {
+        id: "claim-1",
+        status: "supported",
+        supportingEvidenceIds: ["ev-1"],
+        conflictingEvidenceIds: [],
+      },
+    ],
+    evidence: [{ id: "ev-1", claimId: "claim-1" }],
+  });
+  assert.equal(passed.passed, true);
+  assert.equal(passed.claimsWithEvidence, 1);
+
+  const failed = validateEvidenceQualityGate({
+    claims: [
+      {
+        id: "claim-2",
+        status: "supported",
+        supportingEvidenceIds: [],
+        conflictingEvidenceIds: [],
+      },
+    ],
+    evidence: [{ id: "ev-orphan" }],
+  });
+  assert.equal(failed.passed, false);
+  assert.ok(failed.issues.some((issue) => issue.includes("supported_claim_without_support")));
+  assert.ok(failed.issues.some((issue) => issue.includes("orphan_evidence")));
+}
+
 function testTopicFingerprint() {
   assert.equal(topicFingerprint("  好用的 文档转换工具 "), "好用的 文档转换工具");
   assert.equal(topicFingerprint("OpenAI Responses API"), "openai responses api");
@@ -160,6 +229,7 @@ function testBenchmarkFixtures() {
 
 testStageOrder();
 testStageRunnerHelpers();
+testWorkersStopChainingWhenRunStageStops();
 testQueueNameForStage();
 testFetchPolicy();
 testFetcherKind();
@@ -169,6 +239,7 @@ testProviderCapability();
 testProviderHealthAggregation();
 testEvidenceRelation();
 testEvidenceGraphSummary();
+testEvidenceQualityGate();
 testTopicFingerprint();
 testShouldReuseDocument();
 testBenchmarkFixtures();

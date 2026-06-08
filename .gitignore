@@ -2,8 +2,15 @@ node_modules/
 build/
 dist/
 coverage/
+tmp/
 .DS_Store
 *.log
 .env*
 !.env.example
 .data/
+archives/
+news.db
+news.db-shm
+news.db-wal
+workers-analytics/.venv/
+workers-analytics/**/__pycache__/

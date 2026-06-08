@@ -1,5 +1,14 @@
 import { getDomain } from "../url";
-import { SourceType } from "../types";
+import { FrontierScoreBreakdown, SourceType } from "../types";
+
+export const FRONTIER_SCORE_WEIGHTS = {
+  topicalRelevance: 0.25,
+  sourceAuthority: 0.25,
+  primarySourceLikelihood: 0.20,
+  freshness: 0.10,
+  sourceDiversity: 0.10,
+  linkContextQuality: 0.10,
+} as const;
 
 export interface FrontierScoreInput {
   url: string;
@@ -12,6 +21,10 @@ export interface FrontierScoreInput {
 }
 
 export function scoreFrontierItem(input: FrontierScoreInput) {
+  return scoreFrontierItemBreakdown(input).finalScore;
+}
+
+export function scoreFrontierItemBreakdown(input: FrontierScoreInput): FrontierScoreBreakdown {
   const sourceAuthority = scoreSourceAuthority(input.url, input.sourceType);
   const topicalRelevance = scoreTopicalRelevance(input.topic, `${input.title ?? ""} ${input.snippet ?? ""}`);
   const primarySourceLikelihood = scorePrimarySourceLikelihood(input.url, input.sourceType);
@@ -19,20 +32,31 @@ export function scoreFrontierItem(input: FrontierScoreInput) {
   const sourceDiversity = clamp(1 - (input.discoveredDomainCount - 1) * 0.08);
   const linkContextQuality = clamp((input.title ? 0.45 : 0) + (input.snippet ? 0.35 : 0) + (input.depth === 0 ? 0.2 : 0));
 
-  return clamp(
-    sourceAuthority * 0.25 +
-    topicalRelevance * 0.25 +
-    primarySourceLikelihood * 0.20 +
-    freshness * 0.10 +
-    sourceDiversity * 0.10 +
-    linkContextQuality * 0.10,
-  );
+  return {
+    topicalRelevance,
+    sourceAuthority,
+    primarySourceLikelihood,
+    freshness,
+    sourceDiversity,
+    linkContextQuality,
+    weights: FRONTIER_SCORE_WEIGHTS,
+    finalScore: clamp(
+      topicalRelevance * FRONTIER_SCORE_WEIGHTS.topicalRelevance +
+      sourceAuthority * FRONTIER_SCORE_WEIGHTS.sourceAuthority +
+      primarySourceLikelihood * FRONTIER_SCORE_WEIGHTS.primarySourceLikelihood +
+      freshness * FRONTIER_SCORE_WEIGHTS.freshness +
+      sourceDiversity * FRONTIER_SCORE_WEIGHTS.sourceDiversity +
+      linkContextQuality * FRONTIER_SCORE_WEIGHTS.linkContextQuality,
+    ),
+  };
 }
 
 export function scoreSourceAuthority(url: string, sourceType: SourceType) {
   const domain = getDomain(url);
   if (sourceType === "official" || sourceType === "regulatory" || domain.endsWith(".gov") || domain.endsWith(".mil")) return 1;
+  if (sourceType === "dataset" || sourceType === "data-catalog" || sourceType === "structured-api" || sourceType === "financial-data" || sourceType === "geospatial") return 0.9;
   if (sourceType === "mainstream-news" || sourceType === "academic") return 0.82;
+  if (sourceType === "archive" || sourceType === "sports-data") return 0.78;
   if (sourceType === "github" || sourceType === "package-registry" || sourceType === "technical-doc") return 0.72;
   if (sourceType === "community" || sourceType === "benchmark") return 0.52;
   if (sourceType === "rss" || sourceType === "sitemap") return 0.5;
@@ -50,7 +74,9 @@ export function scoreTopicalRelevance(topic: string, text: string) {
 export function scorePrimarySourceLikelihood(url: string, sourceType: SourceType) {
   const lower = url.toLowerCase();
   if (sourceType === "official" || sourceType === "regulatory") return 1;
+  if (sourceType === "dataset" || sourceType === "data-catalog" || sourceType === "structured-api" || sourceType === "financial-data") return 0.9;
   if (lower.includes("press-release") || lower.includes("statement") || lower.endsWith(".pdf")) return 0.75;
+  if (sourceType === "archive") return 0.7;
   if (sourceType === "github" || sourceType === "package-registry") return 0.66;
   if (sourceType === "mainstream-news") return 0.38;
   return 0.2;

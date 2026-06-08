@@ -2,56 +2,412 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Ban,
+  BarChart3,
   CirclePause,
-  ExternalLink,
-  FileSearch,
   Play,
   RefreshCw,
   Search,
 } from 'lucide-react';
 import {
   DiscoveryProviderSummary,
+  DocumentLinkSummary,
+  DocumentSearchResultSummary,
+  EnhancedFetchSmokeResultSummary,
   EvidenceClaimSummary,
+  EvidenceGraphSummary,
   EvidenceItemSummary,
+  EvidenceRelationSummary,
+  ExtractedTableSummary,
+  ProviderHealthSummary,
+  DataSourceLiveSmokeResultSummary,
+  ProviderLiveSmokeResultSummary,
+  PressureSmokeResultSummary,
+  ResearchCapabilityAuditSummary,
+  ResearchQueueStatusSummary,
   ResearchDocumentAssetSummary,
   FrontierItemSummary,
+  PlannedQuerySummary,
   ResearchDocumentSummary,
   ResearchJobSummary,
+  ResearchNewsAnalysisResponse,
+  ResearchPlanSummary,
   ResearchReportSummary,
+  ResearchSampleAcceptanceKindSummary,
+  ResearchSampleAcceptanceResultSummary,
   ResearchRunResponse,
-  ResearchRunStatus,
   ResearchRunSummary,
   ResearchRunEvent,
   SourceProfileSummary,
 } from '../types';
 import { Language, Translator } from '../i18n';
+import { ClaimsPanel, EvidenceGraphPanel, EvidenceTable } from './research/EvidencePanels';
+import { FrontierPanel, ProviderPanel, RuntimeMonitorPanel } from './research/FrontierProviderPanels';
+import { CapabilityAuditPanel } from './research/CapabilityAuditPanel';
+import {
+  ManualRunControls,
+  NewsAnalysisPanel,
+  QueryPlanPanel,
+  RunDocumentSearchPanel,
+  RunTimeline,
+} from './research/RunWorkflowPanels';
+import { SourceExplorer } from './research/SourceExplorerPanel';
+import {
+  Badge,
+  formatDate,
+  formatShortId,
+  IconButton,
+  isTerminalRun,
+  labelForStatus,
+  Metric,
+  Panel,
+  summarizeFrontier,
+  summarizeProviders,
+} from './research/shared';
 
 interface ResearchPanelProps {
   selectedJobId?: string;
   onSelectedJobChange?: (id: string | undefined) => void;
   onBackToSearch?: () => void;
+  onOpenDataLab?: (focus: { runId?: string; datasetId?: string }) => void;
   language: Language;
   t: Translator;
 }
 
-const RUN_STAGES: ResearchRunStatus[] = [
-  'planning',
-  'discovery',
-  'frontier',
-  'fetching',
-  'extracting',
-  'analyzing',
-  'reporting',
-  'completed',
-];
+const panelText = {
+  zh: {
+    exportToDataLab: '导出到 Data Lab',
+    openDataLab: '打开 Data Lab',
+    exportDataSourcesToDataLab: '导入数据源候选',
+    dataSourceExportHint: '把 data-catalog、structured-api、competition-data、sports-data provider 与 frontier 生成 Data Lab 数据源资产清单。',
+    dataSourceExported: '数据源候选已导入 Data Lab。',
+    dataSourceRows: '条数据源',
+    runtimeMonitor: '运行监控',
+    runtimeMonitorHint: '观察 BullMQ discovery 队列和全局 discovery provider 健康，确认深度研究是否真的在排队、抓取和产出候选。',
+    queueHealth: '队列健康',
+    providerHealth: 'Provider 健康',
+    dataSourceCoverage: '数据源覆盖',
+    providerDetails: 'Provider 明细',
+    queueNames: '队列',
+    waiting: '等待',
+    active: '运行',
+    delayed: '延迟',
+    completed: '完成',
+    calls: '调用',
+    candidates: '候选',
+    errors: '错误',
+    latency: '延迟',
+    noProviderHealth: '暂无全局 provider 健康数据。',
+    monitorUnavailable: '运行监控暂不可用',
+    rawAssets: '原始资产',
+    referencedClaims: '引用结论',
+    memory: '记忆状态',
+    noDatasets: '暂无数据集',
+    noJobs: '暂无任务',
+    noArtifacts: '暂无资产',
+    job: '任务',
+    kind: '类型',
+    status: '状态',
+    engine: '引擎',
+    rows: '行数',
+    taskType: '任务类型',
+    freshness: '时效',
+    scoreExplainability: '评分解释',
+    scoreTotal: '总分',
+    scoreTopical: '主题相关',
+    scoreAuthority: '来源权威',
+    scorePrimary: '原始来源',
+    scoreFreshness: '新鲜度',
+    scoreDiversity: '来源多样性',
+    scoreContext: '上下文质量',
+    scoreWeight: '权重',
+    requiredSources: '必需来源',
+    stopConditions: '停止条件',
+    subQuestions: '子问题',
+    purpose: '目的',
+    sourceTypes: '来源类型',
+    priority: '优先级',
+    extractedTables: '抽取表格',
+    tableRows: '表格行数',
+    noTables: '暂无表格',
+    sourceFiltersTitle: '来源筛选',
+    sourceSearchPlaceholder: '搜索 URL、标题、域名或正文',
+    allStatuses: '全部状态',
+    allTiers: '全部等级',
+    sortBy: '排序',
+    sortAuthority: '权威优先',
+    sortEvidence: '证据优先',
+    sortErrors: '失败优先',
+    errorSummary: '错误聚合',
+    noErrors: '暂无抓取错误',
+    claimTrace: 'Claim 反查',
+    showClaimSources: '查看引用来源',
+    filteredSources: '筛选来源',
+    evidenceGraph: '证据图谱',
+    claimsIndex: '结论索引',
+    supports: '支持关系',
+    conflicts: '冲突关系',
+    noRelations: '暂无证据关系',
+    discoveredLinks: '发现外链',
+    noLinks: '暂无外链',
+    enqueued: '已入队',
+    observed: '已发现',
+    manualIteration: '运行干预',
+    manualQueryPlaceholder: '追加新的研究方向、子问题或检索式',
+    appendQuery: '追加查询',
+    retryFailed: '重试失败项',
+    manualQueryQueued: '新的查询方向已追加，并重新进入 discovery。',
+	    retryQueued: '失败项已重新排队。',
+	    retryNothing: '当前没有失败或跳过的 frontier 项。',
+	    documentSearch: '文档检索',
+	    documentSearchHint: '在当前 run 的已抓取正文中检索关键词，快速定位来源、证据和上下文。',
+	    documentSearchPlaceholder: '搜索当前 run 的正文，例如 Pandoc / license / pricing',
+	    searchDocuments: '检索文档',
+	    noSearchResults: '暂无检索结果。',
+	    searchRank: '相关度',
+	    newsAnalysis: '新闻分析',
+	    newsAnalysisHint: '把当前 run 抓取到的文档送入 Data Lab 新闻整理 worker，生成同题聚类、事件时间线和来源质量判断。',
+	    newsCluster: '新闻聚类',
+	    newsTimeline: '事件时间线',
+	    newsSourceQuality: '来源质量',
+	    documentsAnalyzed: '分析文档',
+	    duplicateCount: '重复文档',
+	    clusters: '聚类',
+	    timelineItems: '时间线',
+	    sourceQuality: '来源质量',
+	    noNewsAnalysis: '尚未运行新闻分析。',
+    runNewsAnalysis: '运行',
+    capabilityAudit: '能力验收台',
+    capabilityAuditLoading: '正在检查真实爬虫和数据分析能力。',
+    capabilityAuditUnavailable: '能力验收暂不可用',
+    readinessScore: '就绪分',
+    ready: '就绪',
+    missing: '缺失',
+    searchProviders: '搜索 Provider',
+    dataProviders: '数据 Provider',
+    extractorCoverage: '抓取/抽取/AI',
+    pressureTargets: '深度压测目标',
+    visibleSurfaces: '前端可见功能',
+    remainingGates: '距离 100% 的验收门',
+    requiredFor100: '100% 必需',
+    implemented: '已实现',
+    needsPressureSmoke: '需压测',
+    depthLabel: '深度',
+    domainsLabel: '域名',
+    evidenceTarget: '证据目标',
+    providerLiveSmoke: '真实 Provider smoke',
+    pressureSmoke: 'Standard/Deep 压测',
+    runProviderSmoke: '运行 Provider smoke',
+    dataSourceLiveSmoke: '公开数据源 smoke',
+    runDataSourceSmoke: '运行数据源 smoke',
+    runPressureSmoke: '运行 Deep 压测',
+    runningSmoke: '运行中',
+    noSmokeResult: '尚未运行。',
+    passed: '通过',
+    failed: '失败',
+    generatedTargets: '目标数',
+    plannedQueries: '查询数',
+    frontierCapacity: 'Frontier 容量',
+    latestSmokeEvidence: '最近验收证据',
+    sampleAcceptance: '样本验收',
+    sampleAcceptanceHint: '用内置新闻溯源样本和数据处理样本跑真实分析链路，证明能力不是只停留在配置项。',
+    runNewsTraceAcceptance: '运行新闻溯源样本',
+    runDataProcessingAcceptance: '运行数据处理样本',
+    commands: '命令数',
+    extractorSamples: 'Extractor 逐类型样本',
+    enhancedFetchSmoke: '增强抓取 smoke',
+    enhancedFetchSmokeHint: '检查内置 HTTP/浏览器 fallback，以及 Firecrawl、Crawl4AI、Browserless 增强抓取配置状态。',
+    runEnhancedFetchSmoke: '运行增强抓取 smoke',
+    compatibilityApis: '兼容 API 验收',
+    exportArtifactChecks: '导出产物验收',
+    envChecklist: 'Env 配置清单',
+    envChecklistHint: '只显示变量名和能力影响，不展示密钥值；补齐后重新运行 smoke 即可验收真实抓取能力。',
+    envRuntime: '运行基础设施',
+    envSearch: '全网搜索 Provider',
+    envAi: 'AI 摘要与报告',
+    envData: '数据源增强',
+    envEnhancedFetch: '增强抓取服务',
+    envRequired: '必填',
+    envAtLeastOne: '至少一个',
+    envRecommended: '建议',
+    envOptional: '可选',
+	  },
+	  en: {
+    exportToDataLab: 'Export to Data Lab',
+    openDataLab: 'Open Data Lab',
+    exportDataSourcesToDataLab: 'Import data source candidates',
+    dataSourceExportHint: 'Turn data-catalog, structured-api, competition-data, sports-data providers and frontier into a Data Lab source asset registry.',
+    dataSourceExported: 'Data source candidates imported to Data Lab.',
+    dataSourceRows: 'data sources',
+    runtimeMonitor: 'Runtime monitor',
+    runtimeMonitorHint: 'Watch the BullMQ discovery queue and global discovery provider health to confirm deep research is actually queued, crawling, and producing candidates.',
+    queueHealth: 'Queue health',
+    providerHealth: 'Provider health',
+    dataSourceCoverage: 'Data source coverage',
+    providerDetails: 'Provider details',
+    queueNames: 'Queues',
+    waiting: 'Waiting',
+    active: 'Active',
+    delayed: 'Delayed',
+    completed: 'Completed',
+    calls: 'Calls',
+    candidates: 'Candidates',
+    errors: 'Errors',
+    latency: 'Latency',
+    noProviderHealth: 'No global provider health data yet.',
+    monitorUnavailable: 'Runtime monitor unavailable',
+    rawAssets: 'Raw assets',
+    referencedClaims: 'Referenced claims',
+    memory: 'Memory',
+    noDatasets: 'No datasets',
+    noJobs: 'No jobs',
+    noArtifacts: 'No artifacts',
+    job: 'Job',
+    kind: 'Kind',
+    status: 'Status',
+    engine: 'Engine',
+    rows: 'Rows',
+    taskType: 'Task type',
+    freshness: 'Freshness',
+    scoreExplainability: 'Score explanation',
+    scoreTotal: 'Total',
+    scoreTopical: 'Topical',
+    scoreAuthority: 'Authority',
+    scorePrimary: 'Primary source',
+    scoreFreshness: 'Freshness',
+    scoreDiversity: 'Diversity',
+    scoreContext: 'Context',
+    scoreWeight: 'Weight',
+    requiredSources: 'Required sources',
+    stopConditions: 'Stop conditions',
+    subQuestions: 'Sub-questions',
+    purpose: 'Purpose',
+    sourceTypes: 'Source types',
+    priority: 'Priority',
+    extractedTables: 'Extracted tables',
+    tableRows: 'Rows',
+    noTables: 'No tables',
+    sourceFiltersTitle: 'Source filters',
+    sourceSearchPlaceholder: 'Search URL, title, domain, or content',
+    allStatuses: 'All statuses',
+    allTiers: 'All tiers',
+    sortBy: 'Sort by',
+    sortAuthority: 'Authority first',
+    sortEvidence: 'Evidence first',
+    sortErrors: 'Failures first',
+    errorSummary: 'Error summary',
+    noErrors: 'No crawl errors',
+    claimTrace: 'Claim trace',
+    showClaimSources: 'Show cited sources',
+    filteredSources: 'Filtered sources',
+    evidenceGraph: 'Evidence Graph',
+    claimsIndex: 'Claims Index',
+    supports: 'Supports',
+    conflicts: 'Conflicts',
+    noRelations: 'No evidence relations',
+    discoveredLinks: 'Discovered links',
+    noLinks: 'No links',
+    enqueued: 'Queued',
+    observed: 'Observed',
+    manualIteration: 'Run intervention',
+    manualQueryPlaceholder: 'Append a research direction, sub-question, or search expression',
+    appendQuery: 'Append query',
+    retryFailed: 'Retry failed',
+    manualQueryQueued: 'New query direction appended and discovery queued.',
+	    retryQueued: 'Failed items queued for retry.',
+	    retryNothing: 'No failed or skipped frontier items are available.',
+	    documentSearch: 'Document search',
+	    documentSearchHint: 'Search fetched text inside the current run to quickly locate sources, evidence, and context.',
+	    documentSearchPlaceholder: 'Search this run, e.g. Pandoc / license / pricing',
+	    searchDocuments: 'Search documents',
+	    noSearchResults: 'No search results.',
+	    searchRank: 'Rank',
+	    newsAnalysis: 'News analysis',
+	    newsAnalysisHint: 'Send documents from the current run into the Data Lab news worker for story clustering, event timelines, and source quality signals.',
+	    newsCluster: 'News clustering',
+	    newsTimeline: 'Event timeline',
+	    newsSourceQuality: 'Source quality',
+	    documentsAnalyzed: 'Documents',
+	    duplicateCount: 'Duplicates',
+	    clusters: 'Clusters',
+	    timelineItems: 'Timeline',
+	    sourceQuality: 'Source quality',
+	    noNewsAnalysis: 'No news analysis has been run yet.',
+	    runNewsAnalysis: 'Run',
+    capabilityAudit: 'Capability audit',
+    capabilityAuditLoading: 'Checking real crawler and analytics readiness.',
+    capabilityAuditUnavailable: 'Capability audit unavailable',
+    readinessScore: 'Readiness',
+    ready: 'Ready',
+    missing: 'Missing',
+    searchProviders: 'Search providers',
+    dataProviders: 'Data providers',
+    extractorCoverage: 'Fetch / extract / AI',
+    pressureTargets: 'Depth pressure targets',
+    visibleSurfaces: 'Visible surfaces',
+    remainingGates: 'Gates to 100%',
+    requiredFor100: 'required for 100%',
+    implemented: 'Implemented',
+    needsPressureSmoke: 'Needs smoke',
+    depthLabel: 'Depth',
+    domainsLabel: 'Domains',
+    evidenceTarget: 'Evidence',
+    providerLiveSmoke: 'Live provider smoke',
+    pressureSmoke: 'Standard/Deep pressure',
+    runProviderSmoke: 'Run provider smoke',
+    dataSourceLiveSmoke: 'Public data-source smoke',
+    runDataSourceSmoke: 'Run data-source smoke',
+    runPressureSmoke: 'Run Deep pressure',
+    runningSmoke: 'Running',
+    noSmokeResult: 'Not run yet.',
+    passed: 'Passed',
+    failed: 'Failed',
+    generatedTargets: 'Targets',
+    plannedQueries: 'Queries',
+    frontierCapacity: 'Frontier capacity',
+    latestSmokeEvidence: 'Latest smoke evidence',
+    sampleAcceptance: 'Sample acceptance',
+    sampleAcceptanceHint: 'Run built-in news tracing and data processing samples through the real analysis stack.',
+    runNewsTraceAcceptance: 'Run news trace sample',
+    runDataProcessingAcceptance: 'Run data processing sample',
+    commands: 'Commands',
+    extractorSamples: 'Extractor samples',
+    enhancedFetchSmoke: 'Enhanced fetch smoke',
+    enhancedFetchSmokeHint: 'Check built-in HTTP/browser fallback and Firecrawl, Crawl4AI, Browserless enhanced fetch configuration.',
+    runEnhancedFetchSmoke: 'Run enhanced fetch smoke',
+    compatibilityApis: 'Compatibility API acceptance',
+    exportArtifactChecks: 'Export artifact acceptance',
+    envChecklist: 'Env checklist',
+    envChecklistHint: 'Only variable names and capability impact are shown; secret values are never exposed. Re-run smoke after filling keys.',
+    envRuntime: 'Runtime infrastructure',
+    envSearch: 'Web search providers',
+    envAi: 'AI summaries and reports',
+    envData: 'Data-source boosts',
+    envEnhancedFetch: 'Enhanced fetch services',
+    envRequired: 'required',
+    envAtLeastOne: 'one required',
+    envRecommended: 'recommended',
+    envOptional: 'optional',
+	  },
+	} as const;
+
+const emptyGraphSummary: EvidenceGraphSummary = {
+  supportedClaims: 0,
+  contradictedClaims: 0,
+  uncertainClaims: 0,
+  unverifiedClaims: 0,
+  supportingRelations: 0,
+  conflictingRelations: 0,
+};
 
 export const ResearchPanel: React.FC<ResearchPanelProps> = ({
   selectedJobId,
   onSelectedJobChange,
   onBackToSearch,
+  onOpenDataLab,
   language,
   t,
 }) => {
+  const copy = panelText[language];
   const [jobs, setJobs] = useState<ResearchJobSummary[]>([]);
   const [runs, setRuns] = useState<ResearchRunSummary[]>([]);
   const [selectedJob, setSelectedJob] = useState<ResearchJobSummary | null>(null);
@@ -60,20 +416,192 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
   const [report, setReport] = useState<ResearchReportSummary | null>(null);
   const [documents, setDocuments] = useState<ResearchDocumentSummary[]>([]);
   const [assets, setAssets] = useState<ResearchDocumentAssetSummary[]>([]);
+  const [documentLinks, setDocumentLinks] = useState<DocumentLinkSummary[]>([]);
+  const [tables, setTables] = useState<ExtractedTableSummary[]>([]);
   const [frontier, setFrontier] = useState<FrontierItemSummary[]>([]);
   const [events, setEvents] = useState<ResearchRunEvent[]>([]);
   const [claims, setClaims] = useState<EvidenceClaimSummary[]>([]);
   const [evidence, setEvidence] = useState<EvidenceItemSummary[]>([]);
+  const [graphRelations, setGraphRelations] = useState<EvidenceRelationSummary[]>([]);
+  const [graphSummary, setGraphSummary] = useState<EvidenceGraphSummary>(emptyGraphSummary);
   const [sources, setSources] = useState<SourceProfileSummary[]>([]);
   const [providers, setProviders] = useState<DiscoveryProviderSummary[]>([]);
+  const [plan, setPlan] = useState<ResearchPlanSummary | null>(null);
+  const [plannedQueries, setPlannedQueries] = useState<PlannedQuerySummary[]>([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>('');
-  const [message, setMessage] = useState('');
-  const [running, setRunning] = useState(false);
+	  const [message, setMessage] = useState('');
+	  const [running, setRunning] = useState(false);
+	  const [exportingDataset, setExportingDataset] = useState(false);
+	  const [exportingDataSources, setExportingDataSources] = useState(false);
+	  const [manualQuery, setManualQuery] = useState('');
+	  const [manualAction, setManualAction] = useState<'query' | 'retry' | ''>('');
+	  const [newsAnalysis, setNewsAnalysis] = useState<ResearchNewsAnalysisResponse | null>(null);
+	  const [newsAnalysisAction, setNewsAnalysisAction] = useState<ResearchNewsAnalysisResponse['endpoint'] | ''>('');
+  const [documentSearchQuery, setDocumentSearchQuery] = useState('');
+  const [documentSearchResults, setDocumentSearchResults] = useState<DocumentSearchResultSummary[]>([]);
+  const [documentSearchBusy, setDocumentSearchBusy] = useState(false);
+  const [queueStatus, setQueueStatus] = useState<ResearchQueueStatusSummary | null>(null);
+  const [providerHealth, setProviderHealth] = useState<ProviderHealthSummary[]>([]);
+  const [runtimeMonitorError, setRuntimeMonitorError] = useState('');
+  const [capabilityAudit, setCapabilityAudit] = useState<ResearchCapabilityAuditSummary | null>(null);
+  const [capabilityAuditError, setCapabilityAuditError] = useState('');
+  const [providerSmoke, setProviderSmoke] = useState<ProviderLiveSmokeResultSummary | null>(null);
+  const [dataSourceSmoke, setDataSourceSmoke] = useState<DataSourceLiveSmokeResultSummary | null>(null);
+  const [pressureSmoke, setPressureSmoke] = useState<PressureSmokeResultSummary | null>(null);
+  const [sampleAcceptance, setSampleAcceptance] = useState<ResearchSampleAcceptanceResultSummary | null>(null);
+  const [enhancedFetchSmoke, setEnhancedFetchSmoke] = useState<EnhancedFetchSmokeResultSummary | null>(null);
+  const [capabilitySmokeBusy, setCapabilitySmokeBusy] = useState<'' | 'provider' | 'data-source' | 'pressure' | 'sample-news' | 'sample-data' | 'enhanced-fetch'>('');
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
   const sourceByDomain = useMemo(() => new Map(sources.map((source) => [source.domain, source])), [sources]);
   const providerStats = useMemo(() => summarizeProviders(providers), [providers]);
   const frontierStats = useMemo(() => summarizeFrontier(frontier), [frontier]);
+
+  const loadRuntimeMonitor = async () => {
+    try {
+      const [queueRes, healthRes] = await Promise.all([
+        fetch('/api/research/queues'),
+        fetch('/api/research/providers/health'),
+      ]);
+      const [queueData, healthData] = await Promise.all([
+        queueRes.json(),
+        healthRes.json(),
+      ]);
+      if (!queueRes.ok) throw new Error(queueData.message || queueData.error || `HTTP ${queueRes.status}`);
+      if (!healthRes.ok) throw new Error(healthData.message || healthData.error || `HTTP ${healthRes.status}`);
+      setQueueStatus(queueData);
+      setProviderHealth(healthData.providers ?? []);
+      setRuntimeMonitorError('');
+    } catch (error) {
+      setRuntimeMonitorError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const loadCapabilityAudit = async () => {
+    try {
+      const res = await fetch('/api/research/capabilities');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setCapabilityAudit(data);
+      setProviderSmoke(data.lastSmoke?.provider ?? null);
+      setDataSourceSmoke(data.lastSmoke?.dataSource ?? null);
+      setPressureSmoke(data.lastSmoke?.pressure ?? null);
+      setCapabilityAuditError('');
+    } catch (error) {
+      setCapabilityAuditError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const runProviderSmoke = async () => {
+    setCapabilitySmokeBusy('provider');
+    setMessage('');
+    try {
+      const res = await fetch('/api/research/capabilities/provider-smoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: selectedJob?.topic || topic || 'document conversion tools and news verification' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setProviderSmoke(data);
+      if (data.latest) {
+        setProviderSmoke(data.latest.provider ?? data);
+        setDataSourceSmoke(data.latest.dataSource ?? dataSourceSmoke);
+        setPressureSmoke(data.latest.pressure ?? pressureSmoke);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitySmokeBusy('');
+    }
+  };
+
+  const runDataSourceSmoke = async () => {
+    setCapabilitySmokeBusy('data-source');
+    setMessage('');
+    try {
+      const res = await fetch('/api/research/capabilities/data-source-smoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: selectedJob?.topic || topic || 'public open dataset csv statistics' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setDataSourceSmoke(data);
+      if (data.latest) {
+        setProviderSmoke(data.latest.provider ?? providerSmoke);
+        setDataSourceSmoke(data.latest.dataSource ?? data);
+        setPressureSmoke(data.latest.pressure ?? pressureSmoke);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitySmokeBusy('');
+    }
+  };
+
+  const runPressureSmokeAction = async () => {
+    setCapabilitySmokeBusy('pressure');
+    setMessage('');
+    try {
+      const res = await fetch('/api/research/capabilities/pressure-smoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: selectedJob?.topic || topic || 'document conversion tools and news verification' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setPressureSmoke(data);
+      if (data.latest) {
+        setProviderSmoke(data.latest.provider ?? providerSmoke);
+        setDataSourceSmoke(data.latest.dataSource ?? dataSourceSmoke);
+        setPressureSmoke(data.latest.pressure ?? data);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitySmokeBusy('');
+    }
+  };
+
+  const runSampleAcceptance = async (kind: ResearchSampleAcceptanceKindSummary) => {
+    setCapabilitySmokeBusy(kind === 'news-trace' ? 'sample-news' : 'sample-data');
+    setMessage('');
+    try {
+      const res = await fetch('/api/research/capabilities/sample-acceptance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setSampleAcceptance(data);
+      setMessage(`${data.label} ${data.status === 'passed' ? copy.passed : copy.failed}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitySmokeBusy('');
+    }
+  };
+
+  const runEnhancedFetchSmoke = async () => {
+    setCapabilitySmokeBusy('enhanced-fetch');
+    setMessage('');
+    try {
+      const res = await fetch('/api/research/capabilities/enhanced-fetch-smoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setEnhancedFetchSmoke(data);
+      setMessage(`${copy.enhancedFetchSmoke} ${data.passed ? copy.passed : copy.failed}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitySmokeBusy('');
+    }
+  };
 
   const loadJobs = async () => {
     try {
@@ -121,9 +649,17 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     setEvents([]);
     setClaims([]);
     setEvidence([]);
+    setGraphRelations([]);
+    setGraphSummary(emptyGraphSummary);
     setProviders([]);
     setAssets([]);
-  };
+    setDocumentLinks([]);
+	    setTables([]);
+	    setPlan(null);
+	    setPlannedQueries([]);
+	    setNewsAnalysis(null);
+	    setDocumentSearchResults([]);
+	  };
 
   const loadLegacyReport = async (jobId: string) => {
     try {
@@ -146,26 +682,40 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     }
   };
 
-  const loadRunArtifacts = async (run: ResearchRunSummary) => {
-    setSelectedRun(run);
-    const [detailRes, eventsRes, frontierRes, documentsRes, assetsRes, evidenceRes, sourcesRes, providersRes] = await Promise.all([
+	  const loadRunArtifacts = async (run: ResearchRunSummary) => {
+	    if (selectedRun?.id !== run.id) {
+	      setNewsAnalysis(null);
+	      setDocumentSearchResults([]);
+	    }
+	    setSelectedRun(run);
+	    const [detailRes, planRes, eventsRes, frontierRes, documentsRes, assetsRes, linksRes, tablesRes, evidenceRes, claimsRes, graphRes, sourcesRes, providersRes] = await Promise.all([
       fetch(`/api/research/runs/${run.id}`),
+      fetch(`/api/research/runs/${run.id}/plan`),
       fetch(`/api/research/runs/${run.id}/events`),
       fetch(`/api/research/runs/${run.id}/frontier`),
       fetch(`/api/research/runs/${run.id}/documents`),
       fetch(`/api/research/runs/${run.id}/assets`),
+      fetch(`/api/research/runs/${run.id}/links`),
+      fetch(`/api/research/runs/${run.id}/tables`),
       fetch(`/api/research/runs/${run.id}/evidence`),
+      fetch(`/api/research/runs/${run.id}/claims`),
+      fetch(`/api/research/runs/${run.id}/graph`),
       fetch(`/api/research/runs/${run.id}/sources`),
       fetch(`/api/research/runs/${run.id}/providers`),
     ]);
 
-    const [detail, eventsData, frontierData, documentsData, assetsData, evidenceData, sourcesData, providersData] = await Promise.all([
+    const [detail, planData, eventsData, frontierData, documentsData, assetsData, linksData, tablesData, evidenceData, claimsData, graphData, sourcesData, providersData] = await Promise.all([
       detailRes.json(),
+      planRes.json(),
       eventsRes.json(),
       frontierRes.json(),
       documentsRes.json(),
       assetsRes.json(),
+      linksRes.json(),
+      tablesRes.json(),
       evidenceRes.json(),
+      claimsRes.json(),
+      graphRes.json(),
       sourcesRes.json(),
       providersRes.json(),
     ]);
@@ -177,11 +727,17 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     setFrontier(frontierData.frontier ?? []);
     setDocuments(documentsData.documents ?? []);
     setAssets(assetsData.assets ?? []);
+    setDocumentLinks(linksData.links ?? []);
+    setTables(tablesData.tables ?? []);
     setSelectedDocumentId((documentsData.documents ?? [])[0]?.id ?? '');
-    setClaims(evidenceData.claims ?? []);
+    setClaims(claimsData.claims ?? evidenceData.claims ?? []);
     setEvidence(evidenceData.evidence ?? []);
+    setGraphRelations(graphData.relations ?? []);
+    setGraphSummary(graphData.summary ?? emptyGraphSummary);
     setSources(sourcesData.sources ?? []);
     setProviders(providersData.providers ?? []);
+    setPlan(planData.plan ?? null);
+    setPlannedQueries(planData.queries ?? []);
   };
 
   const createAndRunJob = async () => {
@@ -241,7 +797,140 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     }
   };
 
+  const exportRunToDataset = async () => {
+    if (!selectedRun) return;
+    setExportingDataset(true);
+    setMessage('');
+    try {
+      const res = await fetch(`/api/analytics/datasets/from-research-run/${selectedRun.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `${selectedJob?.topic ?? 'Research'} / ${formatShortId(selectedRun.id)}` }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setMessage(language === 'zh' ? '当前 run 已导出为 Data Lab 数据集。' : 'Current run exported as a Data Lab dataset.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExportingDataset(false);
+    }
+  };
+
+  const exportRunDataSourcesToDataset = async () => {
+    if (!selectedRun) return;
+    setExportingDataSources(true);
+    setMessage('');
+    try {
+      const res = await fetch(`/api/analytics/datasets/from-research-run/${selectedRun.id}/data-sources`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `${selectedJob?.topic ?? 'Research'} / ${formatShortId(selectedRun.id)} / data sources` }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      const count = data.summary?.dataSourceCount ?? data.dataset?.rowCount ?? 0;
+      setMessage(`${copy.dataSourceExported} ${count} ${copy.dataSourceRows}`);
+      onOpenDataLab?.({ runId: selectedRun.id, datasetId: data.dataset?.id });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExportingDataSources(false);
+    }
+  };
+
+  const appendManualQuery = async () => {
+    const normalizedQuery = manualQuery.trim();
+    if (!selectedRun || !normalizedQuery) return;
+    const currentRun = selectedRun;
+    setManualAction('query');
+    setMessage('');
+    try {
+      const res = await fetch(`/api/research/runs/${selectedRun.id}/queries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: normalizedQuery,
+          purpose: 'overview',
+          sourceTypes: ['unknown'],
+          priority: 78,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok && res.status !== 202) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setManualQuery('');
+      const nextRun = data.run ?? currentRun;
+      await loadRuns(currentRun.jobId);
+      await loadRunArtifacts(nextRun);
+      setMessage(copy.manualQueryQueued);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setManualAction('');
+    }
+  };
+
+	  const retryFailedFrontier = async () => {
+    if (!selectedRun) return;
+    const currentRun = selectedRun;
+    setManualAction('retry');
+    setMessage('');
+    try {
+      const res = await fetch(`/api/research/runs/${selectedRun.id}/retry-failed`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok && res.status !== 202) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      const nextRun = data.run ?? currentRun;
+      await loadRuns(currentRun.jobId);
+      await loadRunArtifacts(nextRun);
+      setMessage((data.resetCount ?? 0) > 0 ? copy.retryQueued : copy.retryNothing);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setManualAction('');
+    }
+	  };
+
+	  const runNewsAnalysis = async (endpoint: ResearchNewsAnalysisResponse['endpoint']) => {
+	    if (!selectedRun) return;
+	    setNewsAnalysisAction(endpoint);
+	    setMessage('');
+	    try {
+	      const res = await fetch(`/api/news-analysis/runs/${selectedRun.id}/${endpoint}`, {
+	        method: 'POST',
+	        headers: { 'Content-Type': 'application/json' },
+	      });
+	      const data = await res.json() as ResearchNewsAnalysisResponse & { message?: string; error?: string };
+	      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+	      setNewsAnalysis(data);
+	      setMessage(language === 'zh' ? '新闻分析已完成，结果已保存为 Data Lab 资产。' : 'News analysis completed and saved as a Data Lab artifact.');
+	    } catch (error) {
+	      setMessage(error instanceof Error ? error.message : String(error));
+	    } finally {
+	      setNewsAnalysisAction('');
+	    }
+	  };
+
+	  const searchRunDocuments = async () => {
+	    const query = documentSearchQuery.trim();
+	    if (!selectedRun || !query) return;
+	    setDocumentSearchBusy(true);
+	    setMessage('');
+	    try {
+	      const res = await fetch(`/api/research/runs/${selectedRun.id}/search?q=${encodeURIComponent(query)}`);
+	      const data = await res.json() as { results?: DocumentSearchResultSummary[]; message?: string; error?: string };
+	      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+	      setDocumentSearchResults(data.results ?? []);
+	    } catch (error) {
+	      setMessage(error instanceof Error ? error.message : String(error));
+	      setDocumentSearchResults([]);
+	    } finally {
+	      setDocumentSearchBusy(false);
+	    }
+	  };
+
   useEffect(() => {
+    loadRuntimeMonitor();
+    loadCapabilityAudit();
     loadJobs().then((loadedJobs) => {
       const selected = selectedJobId ? loadedJobs.find((job) => job.id === selectedJobId) : loadedJobs[0];
       if (selected) loadJobArtifacts(selected);
@@ -253,13 +942,14 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     const timer = window.setInterval(() => {
       loadRunArtifacts(selectedRun);
       loadRuns(selectedRun.jobId);
+      loadRuntimeMonitor();
     }, 4000);
     return () => window.clearInterval(timer);
   }, [selectedRun?.id, selectedRun?.status]);
 
   return (
-    <div className="h-full flex bg-[#E4E3E0] text-[#141414]">
-      <aside className="w-[21rem] border-r border-[#141414] bg-[#F5F5F4] flex flex-col">
+    <div className="h-full flex flex-col bg-[#E4E3E0] text-[#141414] lg:flex-row">
+      <aside className="max-h-[42vh] border-b border-[#141414] bg-[#F5F5F4] flex flex-col lg:max-h-none lg:w-[21rem] lg:border-b-0 lg:border-r">
         <div className="p-4 border-b border-stone-300 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             {onBackToSearch && (
@@ -292,7 +982,7 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
           {message && <p className="text-xs text-rose-700 font-mono leading-relaxed">{message}</p>}
         </div>
 
-        <div className="overflow-y-auto flex-1">
+        <div className="overflow-y-auto flex-1 min-h-0">
           {jobs.map((job) => (
             <div key={job.id} className={`border-b border-stone-300 ${selectedJob?.id === job.id ? 'bg-stone-200' : ''}`}>
               <button onClick={() => loadJobArtifacts(job)} className="w-full text-left p-4 hover:bg-stone-100">
@@ -323,7 +1013,7 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 overflow-y-auto p-5">
+      <main className="flex-1 min-h-0 min-w-0 overflow-y-auto p-4 lg:p-5">
         {selectedJob ? (
           <div className="grid xl:grid-cols-[minmax(0,1fr)_22rem] gap-5">
             <section className="min-w-0 space-y-5">
@@ -345,19 +1035,87 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
                   <IconButton onClick={() => controlRun('pause')} disabled={!selectedRun || isTerminalRun(selectedRun.status)} title={t('research.pauseRun')} icon={<CirclePause size={15} />} />
                   <IconButton onClick={() => controlRun('resume')} disabled={!selectedRun || selectedRun.status !== 'paused'} title={t('research.resumeRun')} icon={<RefreshCw size={15} />} />
                   <IconButton onClick={() => controlRun('cancel')} disabled={!selectedRun || isTerminalRun(selectedRun.status)} title={t('research.cancelRun')} icon={<Ban size={15} />} />
+                  <IconButton onClick={exportRunToDataset} disabled={!selectedRun || exportingDataset} title={copy.exportToDataLab} icon={<BarChart3 size={15} />} />
                 </div>
               </div>
+              {message && <p className="font-mono text-xs text-rose-700">{message}</p>}
+
+              <CapabilityAuditPanel
+                audit={capabilityAudit}
+                error={capabilityAuditError}
+                providerSmoke={providerSmoke}
+                dataSourceSmoke={dataSourceSmoke}
+                pressureSmoke={pressureSmoke}
+                sampleAcceptance={sampleAcceptance}
+                enhancedFetchSmoke={enhancedFetchSmoke}
+                busy={capabilitySmokeBusy}
+                onRunProviderSmoke={runProviderSmoke}
+                onRunDataSourceSmoke={runDataSourceSmoke}
+                onRunPressureSmoke={runPressureSmokeAction}
+                onRunSampleAcceptance={runSampleAcceptance}
+                onRunEnhancedFetchSmoke={runEnhancedFetchSmoke}
+                copy={copy}
+                language={language}
+              />
+
+              <RuntimeMonitorPanel
+                queueStatus={queueStatus}
+                providerHealth={providerHealth}
+                error={runtimeMonitorError}
+                copy={copy}
+              />
 
               <RunTimeline run={selectedRun} events={events} language={language} t={t} />
 
-              <div className="grid md:grid-cols-4 gap-3">
-                <Metric label={t('research.docs')} value={documents.length} />
-                <Metric label={t('research.frontier')} value={frontier.length} />
-                <Metric label={t('research.claims')} value={claims.length} />
-                <Metric label={t('research.providers')} value={providers.length} />
-              </div>
+              <ManualRunControls
+                run={selectedRun}
+                query={manualQuery}
+                onQueryChange={setManualQuery}
+                onAppendQuery={appendManualQuery}
+                onRetryFailed={retryFailedFrontier}
+                busy={manualAction}
+                failedCount={(frontierStats.failed ?? 0) + (frontierStats.skipped ?? 0)}
+                copy={copy}
+                language={language}
+              />
 
-              <Panel title={t('research.latestReport')}>
+              <QueryPlanPanel
+                plan={plan}
+                plannedQueries={plannedQueries}
+                fallbackQueries={selectedJob.queryPlan}
+                copy={copy}
+                t={t}
+              />
+
+	              <div className="grid md:grid-cols-4 gap-3">
+	                <Metric label={t('research.docs')} value={documents.length} />
+	                <Metric label={t('research.frontier')} value={frontier.length} />
+	                <Metric label={t('research.claims')} value={claims.length} />
+	                <Metric label={t('research.providers')} value={providers.length} />
+	              </div>
+
+	              <RunDocumentSearchPanel
+	                run={selectedRun}
+	                query={documentSearchQuery}
+	                results={documentSearchResults}
+	                busy={documentSearchBusy}
+	                onQueryChange={setDocumentSearchQuery}
+	                onSearch={searchRunDocuments}
+	                onSelectDocument={setSelectedDocumentId}
+	                copy={copy}
+	                language={language}
+	              />
+
+	              <NewsAnalysisPanel
+	                run={selectedRun}
+	                result={newsAnalysis}
+	                busy={newsAnalysisAction}
+	                onRun={runNewsAnalysis}
+	                copy={copy}
+	                language={language}
+	              />
+
+	              <Panel title={t('research.latestReport')}>
                 {report?.markdown ? (
                   <pre className="whitespace-pre-wrap text-sm leading-6 font-sans">{report.markdown}</pre>
                 ) : (
@@ -365,7 +1123,16 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
                 )}
               </Panel>
 
+              <ClaimsPanel claims={claims} language={language} copy={copy} />
               <EvidenceTable claims={claims} evidence={evidence} language={language} t={t} />
+              <EvidenceGraphPanel
+                claims={claims}
+                evidence={evidence}
+                relations={graphRelations}
+                summary={graphSummary}
+                copy={copy}
+                language={language}
+              />
             </section>
 
             <aside className="space-y-5 min-w-0">
@@ -373,15 +1140,27 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
                 documents={documents}
                 selectedDocument={selectedDocument}
                 assets={assets}
+                links={documentLinks}
+                tables={tables}
                 claims={claims}
                 evidence={evidence}
                 sourceByDomain={sourceByDomain}
                 onSelect={setSelectedDocumentId}
                 language={language}
+                copy={copy}
                 t={t}
               />
-              <FrontierPanel frontier={frontier} stats={frontierStats} language={language} t={t} />
-              <ProviderPanel stats={providerStats} t={t} />
+              <FrontierPanel frontier={frontier} stats={frontierStats} language={language} t={t} copy={copy} />
+              <ProviderPanel
+                stats={providerStats}
+                providers={providers}
+                copy={copy}
+                t={t}
+                run={selectedRun}
+                exporting={exportingDataSources}
+                onExportDataSources={exportRunDataSourcesToDataset}
+                onOpenDataLab={selectedRun ? () => onOpenDataLab?.({ runId: selectedRun.id }) : undefined}
+              />
             </aside>
           </div>
         ) : (
@@ -396,376 +1175,3 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     </div>
   );
 };
-
-const RunTimeline: React.FC<{
-  run: ResearchRunSummary | null;
-  events: ResearchRunEvent[];
-  language: Language;
-  t: Translator;
-}> = ({ run, events, language, t }) => (
-  <Panel title={t('research.timeline')}>
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-      {RUN_STAGES.map((stage) => (
-        <div key={stage} className={`border px-3 py-2 ${isStageActive(run, stage) ? 'border-stone-900 bg-white' : 'border-stone-300 bg-stone-100'}`}>
-          <div className="font-mono text-[10px] uppercase opacity-50">{labelForStatus(stage, language)}</div>
-          <div className="h-1 bg-stone-300 mt-2">
-            <div className={`h-full ${isStageActive(run, stage) ? 'bg-emerald-700' : 'bg-transparent'}`} />
-          </div>
-        </div>
-      ))}
-    </div>
-    <div className="space-y-2 max-h-44 overflow-y-auto">
-      {events.length === 0 ? (
-        <p className="font-mono text-xs opacity-60">{t('research.noEvents')}</p>
-      ) : events.slice(-12).reverse().map((event) => (
-        <div key={event.id} className="border-b border-stone-300 pb-2 last:border-b-0">
-          <div className="font-mono text-[10px] uppercase opacity-50">{formatDate(event.createdAt)} / {labelForStatus(event.stage, language)}</div>
-          <div className="text-sm leading-snug">{event.message}</div>
-        </div>
-      ))}
-    </div>
-  </Panel>
-);
-
-const EvidenceTable: React.FC<{
-  claims: EvidenceClaimSummary[];
-  evidence: EvidenceItemSummary[];
-  language: Language;
-  t: Translator;
-}> = ({ claims, evidence, language, t }) => (
-  <Panel title={t('research.evidenceTable')}>
-    {claims.length === 0 ? (
-      <p className="font-mono text-xs opacity-60">{t('research.noEvidence')}</p>
-    ) : (
-      <div className="space-y-3">
-        {claims.slice(0, 10).map((claim) => {
-          const supporting = evidence.filter((item) => claim.supportingEvidenceIds.includes(item.id));
-          return (
-            <div key={claim.id} className="border border-stone-300 bg-white p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="text-sm leading-snug">{claim.claim}</div>
-                <span className="font-mono text-[10px] uppercase whitespace-nowrap">{labelForStatus(claim.status, language)} / {Math.round(claim.confidence * 100)}%</span>
-              </div>
-              <div className="mt-3 space-y-2">
-                {supporting.slice(0, 3).map((item) => (
-                  <a key={item.id} href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="block text-xs border-l-2 border-emerald-700 pl-3 hover:bg-stone-100">
-                    <div className="font-mono opacity-50 mb-1">{t('research.credibility')}: {Math.round((item.credibilityScore ?? 0) * 100)}%</div>
-                    <div className="line-clamp-2">{item.snippet}</div>
-                  </a>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    )}
-  </Panel>
-);
-
-const SourceExplorer: React.FC<{
-  documents: ResearchDocumentSummary[];
-  selectedDocument?: ResearchDocumentSummary;
-  assets: ResearchDocumentAssetSummary[];
-  claims: EvidenceClaimSummary[];
-  evidence: EvidenceItemSummary[];
-  sourceByDomain: Map<string, SourceProfileSummary>;
-  onSelect: (id: string) => void;
-  language: Language;
-  t: Translator;
-}> = ({ documents, selectedDocument, assets, claims, evidence, sourceByDomain, onSelect, language, t }) => {
-  const profile = selectedDocument ? sourceByDomain.get(selectedDocument.domain) : undefined;
-  const selectedEvidence = selectedDocument
-    ? evidence.filter((item) => item.documentId === selectedDocument.id)
-    : [];
-  const selectedEvidenceIds = new Set(selectedEvidence.map((item) => item.id));
-  const selectedClaims = claims.filter((claim) => (
-    claim.supportingEvidenceIds.some((id) => selectedEvidenceIds.has(id))
-    || claim.conflictingEvidenceIds.some((id) => selectedEvidenceIds.has(id))
-    || selectedEvidence.some((item) => item.claimId === claim.id)
-  ));
-  const selectedAssets = selectedDocument
-    ? assets.filter((asset) => asset.documentId === selectedDocument.id)
-    : [];
-  return (
-    <Panel title={t('research.sourceExplorer')}>
-      <div className="space-y-2 max-h-56 overflow-y-auto mb-4">
-        {documents.length === 0 ? (
-          <p className="font-mono text-xs opacity-60">{t('research.noDocuments')}</p>
-        ) : documents.map((document) => (
-          <button
-            key={document.id}
-            onClick={() => onSelect(document.id)}
-            className={`w-full text-left border px-3 py-2 ${selectedDocument?.id === document.id ? 'border-stone-900 bg-white' : 'border-stone-300 bg-stone-100 hover:bg-white'}`}
-          >
-            <div className="font-mono text-[10px] uppercase opacity-50">{document.status} / {labelForMemoryStatus(document.memoryStatus, language)} / {document.domain}</div>
-            <div className="text-sm leading-snug truncate">{document.title || document.url}</div>
-          </button>
-        ))}
-      </div>
-      {selectedDocument && (
-        <div className="border-t border-stone-300 pt-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="font-mono text-[10px] uppercase opacity-50">{selectedDocument.domain}</div>
-              <div className="font-serif text-lg leading-tight">{selectedDocument.title || selectedDocument.url}</div>
-            </div>
-            <a href={selectedDocument.finalUrl || selectedDocument.url} target="_blank" rel="noopener noreferrer" className="p-2 hover:bg-stone-200 rounded" title={t('research.openSource')}>
-              <ExternalLink size={15} />
-            </a>
-          </div>
-          <div className="grid grid-cols-3 gap-2 mt-3">
-            <MiniMetric label={t('research.tier')} value={profile?.authorityTier ?? 'T4'} />
-            <MiniMetric label={t('research.official')} value={`${Math.round((profile?.officialLikelihood ?? 0) * 100)}%`} />
-            <MiniMetric label={t('research.mainstream')} value={`${Math.round((profile?.mainstreamLikelihood ?? 0) * 100)}%`} />
-          </div>
-          <div className="mt-2">
-            <MiniMetric label={language === 'zh' ? '记忆状态' : 'Memory'} value={labelForMemoryStatus(selectedDocument.memoryStatus, language)} />
-          </div>
-          {selectedAssets.length > 0 && (
-            <div className="mt-3">
-              <div className="font-mono text-[10px] uppercase opacity-50 mb-1">{language === 'zh' ? '原始资产' : 'Raw assets'}</div>
-              <div className="flex flex-wrap gap-2">
-                {selectedAssets.map((asset) => (
-                  <span key={asset.id} className="border border-stone-300 bg-stone-100 px-2 py-1 text-[10px] font-mono uppercase">
-                    {asset.assetType} / {formatBytes(asset.metadata.sizeBytes)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {selectedClaims.length > 0 && (
-            <div className="mt-3">
-              <div className="font-mono text-[10px] uppercase opacity-50 mb-1">{language === 'zh' ? '引用结论' : 'Referenced claims'}</div>
-              <ul className="space-y-1">
-                {selectedClaims.slice(0, 4).map((claim) => (
-                  <li key={claim.id} className="text-xs leading-5 border-l-2 border-stone-500 pl-2">
-                    {claim.claim}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {selectedDocument.error && <p className="text-xs text-rose-700 mt-3">{selectedDocument.error}</p>}
-          {selectedDocument.contentText && (
-            <p className="text-xs leading-5 mt-3 line-clamp-6">{selectedDocument.contentText}</p>
-          )}
-        </div>
-      )}
-    </Panel>
-  );
-};
-
-const FrontierPanel: React.FC<{
-  frontier: FrontierItemSummary[];
-  stats: Record<string, number>;
-  language: Language;
-  t: Translator;
-}> = ({ frontier, stats, language, t }) => (
-  <Panel title={t('research.frontierView')}>
-    <div className="grid grid-cols-5 gap-1 mb-3">
-      {['queued', 'fetching', 'fetched', 'failed', 'skipped'].map((status) => (
-        <MiniMetric key={status} label={labelForStatus(status, language)} value={stats[status] ?? 0} />
-      ))}
-    </div>
-    <div className="space-y-2 max-h-64 overflow-y-auto">
-      {frontier.slice(0, 16).map((item) => (
-        <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer" className="block border-b border-stone-300 pb-2 last:border-b-0">
-          <div className="font-mono text-[10px] uppercase opacity-50">
-            {labelForStatus(item.status, language)} / {item.sourceType} / {Math.round(item.priorityScore * 100)}
-          </div>
-          <div className="text-xs leading-snug truncate">{item.url}</div>
-          {item.lastError && <div className="text-xs text-rose-700 mt-1">{item.lastError}</div>}
-        </a>
-      ))}
-    </div>
-  </Panel>
-);
-
-const ProviderPanel: React.FC<{ stats: ProviderStat[]; t: Translator }> = ({ stats, t }) => (
-  <Panel title={t('research.providerPanel')}>
-    {stats.length === 0 ? (
-      <p className="font-mono text-xs opacity-60">{t('research.noProviders')}</p>
-    ) : (
-      <div className="space-y-2">
-        {stats.map((stat) => (
-          <div key={stat.provider} className="border border-stone-300 bg-white p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="font-mono text-xs uppercase">{stat.provider}</div>
-              <div className="font-mono text-[10px] opacity-50">{stat.calls} {t('research.calls')}</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 mt-2">
-              <MiniMetric label={t('research.candidates')} value={stat.candidates} />
-              <MiniMetric label={t('research.errors')} value={stat.errors} />
-              <MiniMetric label={t('research.latency')} value={`${stat.durationMs}ms`} />
-            </div>
-          </div>
-        ))}
-      </div>
-    )}
-  </Panel>
-);
-
-const Panel: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <section className="border border-stone-300 bg-stone-100 p-4 min-w-0">
-    <h3 className="font-serif italic text-lg mb-3 flex items-center gap-2">
-      <FileSearch size={16} />
-      {title}
-    </h3>
-    {children}
-  </section>
-);
-
-const Metric: React.FC<{ label: string; value: string | number }> = ({ label, value }) => (
-  <div className="border border-stone-300 bg-stone-100 p-3">
-    <div className="font-mono text-[10px] uppercase opacity-50">{label}</div>
-    <div className="font-serif text-xl">{value}</div>
-  </div>
-);
-
-const MiniMetric: React.FC<{ label: string; value: string | number }> = ({ label, value }) => (
-  <div className="border border-stone-300 bg-stone-100 p-2 min-w-0">
-    <div className="font-mono text-[9px] uppercase opacity-50 truncate">{label}</div>
-    <div className="font-mono text-xs truncate">{value}</div>
-  </div>
-);
-
-const Badge: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <span className="border border-stone-300 bg-stone-100 px-2 py-1">{children}</span>
-);
-
-const IconButton: React.FC<{ icon: React.ReactNode; title: string; disabled?: boolean; onClick: () => void }> = ({
-  icon,
-  title,
-  disabled,
-  onClick,
-}) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    title={title}
-    className="w-9 h-9 inline-flex items-center justify-center border border-stone-400 bg-stone-100 hover:bg-white disabled:opacity-40"
-  >
-    {icon}
-  </button>
-);
-
-interface ProviderStat {
-  provider: string;
-  calls: number;
-  candidates: number;
-  errors: number;
-  durationMs: number;
-}
-
-function summarizeProviders(providers: DiscoveryProviderSummary[]): ProviderStat[] {
-  const map = new Map<string, ProviderStat>();
-  for (const provider of providers) {
-    const row = map.get(provider.provider) ?? {
-      provider: provider.provider,
-      calls: 0,
-      candidates: 0,
-      errors: 0,
-      durationMs: 0,
-    };
-    row.calls += 1;
-    row.candidates += provider.candidateCount;
-    row.errors += provider.error ? 1 : 0;
-    row.durationMs += provider.durationMs;
-    map.set(provider.provider, row);
-  }
-  return [...map.values()].sort((left, right) => right.candidates - left.candidates);
-}
-
-function summarizeFrontier(frontier: FrontierItemSummary[]) {
-  return frontier.reduce<Record<string, number>>((acc, item) => {
-    acc[item.status] = (acc[item.status] ?? 0) + 1;
-    return acc;
-  }, {});
-}
-
-function isStageActive(run: ResearchRunSummary | null, stage: ResearchRunStatus) {
-  if (!run) return false;
-  return RUN_STAGES.indexOf(stage) <= RUN_STAGES.indexOf(run.stage);
-}
-
-function isTerminalRun(status: string) {
-  return ['completed', 'failed', 'cancelled'].includes(status);
-}
-
-function labelForStatus(status: string, language: Language) {
-  const zh: Record<string, string> = {
-    active: '启用',
-    paused: '暂停',
-    running: '运行中',
-    completed: '完成',
-    failed: '失败',
-    queued: '排队',
-    planning: '规划',
-    discovery: '发现',
-    frontier: '队列',
-    fetching: '抓取',
-    extracting: '抽取',
-    analyzing: '分析',
-    reporting: '报告',
-    cancelled: '取消',
-    skipped: '跳过',
-    fetched: '已抓取',
-    supported: '支持',
-    contradicted: '冲突',
-    uncertain: '不确定',
-    unverified: '未验证',
-  };
-  const en: Record<string, string> = {
-    active: 'Active',
-    paused: 'Paused',
-    running: 'Running',
-    completed: 'Completed',
-    failed: 'Failed',
-    queued: 'Queued',
-    planning: 'Planning',
-    discovery: 'Discovery',
-    frontier: 'Frontier',
-    fetching: 'Fetching',
-    extracting: 'Extracting',
-    analyzing: 'Analyzing',
-    reporting: 'Reporting',
-    cancelled: 'Cancelled',
-    skipped: 'Skipped',
-    fetched: 'Fetched',
-    supported: 'Supported',
-    contradicted: 'Contradicted',
-    uncertain: 'Uncertain',
-    unverified: 'Unverified',
-  };
-  return (language === 'zh' ? zh : en)[status] ?? status;
-}
-
-function labelForMemoryStatus(status: ResearchDocumentSummary['memoryStatus'] | undefined, language: Language) {
-  const zh: Record<string, string> = {
-    fresh: '新抓取',
-    reused: '已复用',
-    stale: '未复用',
-  };
-  const en: Record<string, string> = {
-    fresh: 'fresh',
-    reused: 'reused',
-    stale: 'stale',
-  };
-  return (language === 'zh' ? zh : en)[status ?? 'fresh'] ?? (status ?? 'fresh');
-}
-
-function formatBytes(value: number | undefined) {
-  const bytes = value ?? 0;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatShortId(id: string) {
-  return id.slice(0, 8);
-}
-
-function formatDate(value?: string) {
-  if (!value) return '';
-  return new Date(value).toLocaleString();
-}

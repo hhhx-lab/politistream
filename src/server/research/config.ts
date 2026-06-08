@@ -1,10 +1,22 @@
 export interface ResearchConfig {
   databaseUrl?: string;
   redisUrl?: string;
+  aiProvider?: string;
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  aiModel: string;
   braveApiKey?: string;
   serpApiKey?: string;
   tavilyApiKey?: string;
+  newsApiKey?: string;
   githubToken?: string;
+  fredApiKey?: string;
+  kaggleUsername?: string;
+  kaggleKey?: string;
+  browserProvider: "local" | "browserless";
+  browserlessUrl?: string;
+  crawl4aiUrl?: string;
+  firecrawlApiKey?: string;
 }
 
 export interface ResearchFetchConfig {
@@ -36,8 +48,33 @@ export interface ResearchConfigStatus {
     brave: boolean;
     serpApi: boolean;
     tavily: boolean;
+    newsApi: boolean;
+  };
+  dataProviders: {
+    gdelt: boolean;
+    wayback: boolean;
+    commonCrawl: boolean;
+    ckan: boolean;
+    socrata: boolean;
+    arcgis: boolean;
+    kaggle: boolean;
+    huggingFace: boolean;
+    openMl: boolean;
+    worldBank: boolean;
+    fred: boolean;
+    openAlex: boolean;
+    crossref: boolean;
+    sports: boolean;
+  };
+  ai: {
+    provider: string;
+    model: string;
+    configured: boolean;
+    openaiConfigured: boolean;
+    geminiConfigured: boolean;
   };
   enabledSearchProviderCount: number;
+  enabledDataProviderCount: number;
   readyForStorage: boolean;
   readyForQueue: boolean;
 }
@@ -55,28 +92,88 @@ export function getResearchConfig(env = process.env): ResearchConfig {
   return {
     databaseUrl: env.DATABASE_URL,
     redisUrl: env.REDIS_URL,
+    aiProvider: env.AI_PROVIDER || "openai",
+    openaiApiKey: env.OPENAI_API_KEY,
+    geminiApiKey: env.GEMINI_API_KEY,
+    aiModel: env.AI_MODEL || env.OPENAI_MODEL || "gpt-5.4",
     braveApiKey: env.BRAVE_API_KEY,
     serpApiKey: env.SERPAPI_API_KEY,
     tavilyApiKey: env.TAVILY_API_KEY,
+    newsApiKey: env.NEWSAPI_KEY || env.NEWS_API_KEY,
     githubToken: env.GITHUB_TOKEN,
+    fredApiKey: env.FRED_API_KEY,
+    kaggleUsername: env.KAGGLE_USERNAME,
+    kaggleKey: env.KAGGLE_KEY,
+    browserProvider: env.RESEARCH_BROWSER_PROVIDER === "browserless" ? "browserless" : "local",
+    browserlessUrl: env.BROWSERLESS_URL,
+    crawl4aiUrl: env.CRAWL4AI_URL,
+    firecrawlApiKey: env.FIRECRAWL_API_KEY,
   };
 }
 
 export function getResearchConfigStatus(config = getResearchConfig()): ResearchConfigStatus {
+  const activeAiProvider = resolveAiProvider(config);
   const searchProviders = {
     brave: Boolean(config.braveApiKey),
     serpApi: Boolean(config.serpApiKey),
     tavily: Boolean(config.tavilyApiKey),
+    newsApi: Boolean(config.newsApiKey),
+  };
+  const dataProviders = {
+    gdelt: true,
+    wayback: true,
+    commonCrawl: true,
+    ckan: true,
+    socrata: true,
+    arcgis: true,
+    kaggle: Boolean(config.kaggleUsername && config.kaggleKey),
+    huggingFace: true,
+    openMl: true,
+    worldBank: true,
+    fred: Boolean(config.fredApiKey),
+    openAlex: true,
+    crossref: true,
+    sports: true,
   };
 
   return {
     databaseConfigured: Boolean(config.databaseUrl),
     redisConfigured: Boolean(config.redisUrl),
     searchProviders,
+    dataProviders,
+    ai: {
+      provider: activeAiProvider ?? config.aiProvider ?? "openai",
+      model: resolveAiModel(config),
+      configured: Boolean(activeAiProvider),
+      openaiConfigured: isValidApiKey(config.openaiApiKey, "MY_OPENAI_API_KEY"),
+      geminiConfigured: isValidApiKey(config.geminiApiKey, "MY_GEMINI_API_KEY"),
+    },
     enabledSearchProviderCount: Object.values(searchProviders).filter(Boolean).length,
+    enabledDataProviderCount: Object.values(dataProviders).filter(Boolean).length,
     readyForStorage: Boolean(config.databaseUrl),
     readyForQueue: Boolean(config.redisUrl),
   };
+}
+
+export type ActiveAiProvider = "openai" | "gemini";
+
+export function resolveAiProvider(config = getResearchConfig()): ActiveAiProvider | null {
+  const preferred = (config.aiProvider || "openai").toLowerCase();
+  const openaiReady = isValidApiKey(config.openaiApiKey, "MY_OPENAI_API_KEY");
+  const geminiReady = isValidApiKey(config.geminiApiKey, "MY_GEMINI_API_KEY");
+
+  if (preferred === "openai" && openaiReady) return "openai";
+  if (preferred === "gemini" && geminiReady) return "gemini";
+  if (openaiReady) return "openai";
+  if (geminiReady) return "gemini";
+  return null;
+}
+
+export function resolveAiModel(config = getResearchConfig()) {
+  const provider = resolveAiProvider(config);
+  if (provider === "openai") return config.aiModel;
+  if (provider === "gemini") return "gemini-2.0-flash";
+  return config.aiModel;
 }
 
 export function requireResearchDatabase(config = getResearchConfig()) {
@@ -129,6 +226,11 @@ export function getResearchMemoryConfig(env = process.env): ResearchMemoryConfig
     enabled: parseBoolean(env.RESEARCH_MEMORY_ENABLED, true),
     maxAgeHours: positiveInt(env.RESEARCH_MEMORY_MAX_AGE_HOURS, 24),
   };
+}
+
+export function isValidApiKey(value: string | undefined, placeholder?: string) {
+  if (!value || value === placeholder) return false;
+  return value.trim().length > 10;
 }
 
 function positiveInt(value: string | undefined, fallback: number) {

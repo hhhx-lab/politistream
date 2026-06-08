@@ -7,15 +7,19 @@ import { extractNpmDocument, extractPyPiDocument } from "./extractors/packageExt
 import { extractPdfDocument } from "./extractors/pdfExtractor";
 import { routeExtractorForUrl } from "./extractors/router";
 import { extractSitemapUrls } from "./extractors/sitemapExtractor";
+import { inspectStructuredBuffer } from "./extractors/structuredInspector";
 import { fetchBrowserContent } from "./fetchers/browserFetcher";
+import { tryEnhancedFetch } from "./fetchers/enhancedFetcher";
 import { createDomainLimiter, robotsAllowsPath, shouldRetryFetch } from "./fetchers/fetchPolicy";
 import { chooseFetcherKind, fetchErrorStatus, fetchHttpContent, FetchContentResult } from "./fetchers/httpFetcher";
 import { canonicalizeUrl, getDomain, hashContent, resolveLink } from "./url";
-import { CrawlDocument, ExtractedDocument, ResearchBudget, SearchCandidate } from "./types";
+import { CrawlDocument, ExtractedDocument, ExtractedLink, ExtractedTable, ExtractorKind, ResearchBudget, SearchCandidate } from "./types";
 
 export interface CrawlResult {
   document: CrawlDocument;
   discoveredLinks: string[];
+  documentLinks: ExtractedLink[];
+  tables: ExtractedTable[];
   rawContent?: {
     url: string;
     contentType: string;
@@ -46,22 +50,79 @@ export async function crawlPublicPage(candidate: SearchCandidate): Promise<Crawl
           error: "robots_txt_disallowed",
           fetchedAt: new Date().toISOString(),
           memoryStatus: "stale",
+          metadata: {
+            readerPath: "robots",
+            fetcher: "robots",
+            fallbackUsed: false,
+            diagnostics: ["robots_txt_disallowed"],
+          },
         },
+        documentLinks: [],
         discoveredLinks: [],
+        tables: [],
+      };
+    }
+
+    const earlyKind = routeExtractorForUrl(candidate.url);
+    const enhanced = await tryEnhancedFetch(candidate.url, earlyKind);
+    if (enhanced) {
+      const documentLinks = resolveExtractedLinks(enhanced.fetch.finalUrl, enhanced.document.links);
+      return {
+        document: {
+          jobId: candidate.jobId,
+          runId: candidate.runId,
+          url: candidate.url,
+          canonicalUrl: canonicalizeUrl(enhanced.fetch.finalUrl) ?? canonicalUrl,
+          finalUrl: enhanced.fetch.finalUrl,
+          title: enhanced.document.title ?? candidate.title,
+          domain,
+          contentText: enhanced.document.contentText,
+          contentHash: hashContent(enhanced.document.contentText),
+          depth: candidate.depth,
+          status: enhanced.document.contentText ? "fetched" : "failed",
+          error: enhanced.document.contentText ? undefined : "empty_content",
+          fetchedAt: enhanced.fetch.fetchedAt,
+          memoryStatus: "fresh",
+          metadata: fetchDiagnosticsMetadata({
+            readerPath: enhanced.provider,
+            response: enhanced.fetch,
+            extractor: earlyKind,
+            diagnostics: [
+              `${enhanced.provider}_provider`,
+              enhanced.document.contentText ? "content_extracted" : "empty_content",
+            ],
+          }),
+        },
+        documentLinks,
+        discoveredLinks: documentLinks.map((link) => link.url),
+        tables: enhanced.document.tables,
+        rawContent: {
+          url: enhanced.fetch.finalUrl,
+          contentType: enhanced.fetch.contentType,
+          data: enhanced.fetch.data,
+          fetchedAt: enhanced.fetch.fetchedAt,
+        },
       };
     }
 
     let response = await fetchWithPolicy(candidate.url, domain, fetchConfig);
+    const initialResponse = response;
     let extracted = await extractResponseDocument(response.data, canonicalizeUrl(response.finalUrl) ?? canonicalUrl, response.contentType);
     let contentText = extracted.contentText.replace(/\s+/g, " ").trim();
+    let fallbackUsed = false;
+    let readerPath = response.fetcher;
 
     if (!contentText && shouldUseBrowserFallback(response, candidate.url, fetchConfig)) {
       response = await fetchBrowserContent(candidate.url);
       extracted = await extractResponseDocument(response.data, canonicalizeUrl(response.finalUrl) ?? canonicalUrl, response.contentType);
       contentText = extracted.contentText.replace(/\s+/g, " ").trim();
+      fallbackUsed = true;
+      readerPath = "browser";
     }
 
     const finalUrl = canonicalizeUrl(response.finalUrl) ?? canonicalUrl;
+    const documentLinks = resolveExtractedLinks(finalUrl, extracted.links);
+    const extractor = routeExtractorForUrl(finalUrl, response.contentType);
 
     return {
       document: {
@@ -79,8 +140,24 @@ export async function crawlPublicPage(candidate: SearchCandidate): Promise<Crawl
         error: contentText ? undefined : "empty_content",
         fetchedAt: response.fetchedAt,
         memoryStatus: "fresh",
+        metadata: fetchDiagnosticsMetadata({
+          readerPath,
+          response,
+          extractor,
+          fallbackUsed,
+          diagnostics: [
+            `fetcher:${response.fetcher}`,
+            `status:${response.status}`,
+            `content_type:${response.contentType || "unknown"}`,
+            `extractor:${extractor}`,
+            fallbackUsed ? `fallback_from:${initialResponse.fetcher}` : "fallback_not_used",
+            contentText ? "content_extracted" : "empty_content",
+          ],
+        }),
       },
-      discoveredLinks: extracted.links.map((link) => resolveLink(finalUrl, link.url)).filter(Boolean) as string[],
+      documentLinks,
+      discoveredLinks: documentLinks.map((link) => link.url),
+      tables: extracted.tables,
       rawContent: {
         url: finalUrl,
         contentType: response.contentType,
@@ -106,10 +183,59 @@ export async function crawlPublicPage(candidate: SearchCandidate): Promise<Crawl
         error: error instanceof Error ? error.message : String(error),
         fetchedAt: new Date().toISOString(),
         memoryStatus: "stale",
+        metadata: {
+          readerPath: "error",
+          fetcher: "unknown",
+          statusCode: status,
+          fallbackUsed: false,
+          diagnostics: [
+            status ? `status:${status}` : "status:unknown",
+            error instanceof Error ? error.message : String(error),
+          ],
+        },
       },
+      documentLinks: [],
       discoveredLinks: [],
+      tables: [],
     };
   }
+}
+
+function fetchDiagnosticsMetadata(input: {
+  readerPath: string;
+  response: FetchContentResult;
+  extractor?: ExtractorKind;
+  fallbackUsed?: boolean;
+  diagnostics?: string[];
+}) {
+  return {
+    readerPath: input.readerPath,
+    fetcher: input.response.fetcher,
+    contentType: input.response.contentType,
+    statusCode: input.response.status,
+    durationMs: input.response.durationMs,
+    fallbackUsed: Boolean(input.fallbackUsed),
+    extractor: input.extractor,
+    diagnostics: input.diagnostics ?? [],
+  };
+}
+
+function resolveExtractedLinks(baseUrl: string, links: ExtractedLink[]): ExtractedLink[] {
+  const seen = new Set<string>();
+  const resolvedLinks: ExtractedLink[] = [];
+
+  for (const link of links) {
+    const resolved = resolveLink(baseUrl, link.url);
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+    resolvedLinks.push({
+      url: resolved,
+      text: link.text || resolved,
+      context: link.context,
+    });
+  }
+
+  return resolvedLinks;
 }
 
 async function fetchWithPolicy(
@@ -209,6 +335,36 @@ async function extractResponseDocument(
     return extractPyPiDocument(url);
   }
 
+  if (isStructuredKind(kind)) {
+    try {
+      return await inspectStructuredBuffer({
+        url,
+        contentType,
+        kind,
+        buffer,
+        title: undefined,
+        maxRows: 50,
+      });
+    } catch (error) {
+      const text = buffer.toString("utf8").trim();
+      return {
+        url,
+        canonicalUrl: canonicalizeUrl(url) ?? url,
+        title: undefined,
+        contentText: text.slice(0, 20000),
+        contentMarkdown: text ? `# ${url}\n\n${text}` : undefined,
+        links: [],
+        tables: [],
+        metadata: {
+          parseError: error instanceof Error ? error.message : String(error),
+          contentType,
+          kind,
+        },
+        extractor: "html",
+      };
+    }
+  }
+
   const text = buffer.toString("utf8");
   if (kind === "sitemap") {
     const entries = extractSitemapUrls(text);
@@ -224,7 +380,41 @@ async function extractResponseDocument(
     };
   }
 
-  return extractHtmlDocument(text, url);
+  const extracted = extractHtmlDocument(text, url);
+  if ((extracted.contentText?.length ?? 0) >= 300) {
+    return extracted;
+  }
+
+  const inspected = await inspectStructuredBuffer({
+    url,
+    contentType,
+    kind: "html",
+    buffer,
+    title: extracted.title,
+    maxRows: 50,
+  }).catch(() => null);
+
+  if (inspected && (inspected.contentText?.length ?? 0) > (extracted.contentText?.length ?? 0)) {
+    return {
+      ...extracted,
+      title: inspected.title ?? extracted.title,
+      contentText: inspected.contentText,
+      contentMarkdown: inspected.contentMarkdown ?? extracted.contentMarkdown,
+      links: inspected.links.length > 0 ? inspected.links : extracted.links,
+      tables: inspected.tables.length > 0 ? inspected.tables : extracted.tables,
+      metadata: {
+        ...extracted.metadata,
+        ...inspected.metadata,
+      },
+      extractor: inspected.extractor,
+    };
+  }
+
+  return extracted;
+}
+
+function isStructuredKind(kind: string) {
+  return ["csv", "json", "jsonl", "parquet", "excel", "geojson", "sdmx", "xbrl", "netcdf", "docx", "pptx", "txt", "md"].includes(kind);
 }
 
 export function extractLinks(html: string, baseUrl: string): string[] {

@@ -9,7 +9,7 @@ import {
   normalizeDiscoveredCandidate,
   runDiscoveryProviders,
 } from "./discovery/registry";
-import { buildEvidenceClaim, buildEvidenceRelation, createSourceProfile, credibilityScoreFor, summarizeEvidenceGraph } from "./evidence/graph";
+import { buildEvidenceClaim, buildEvidenceRelation, createSourceProfile, credibilityScoreFor, summarizeEvidenceGraph, validateEvidenceQualityGate } from "./evidence/graph";
 import { candidateToFrontierItem, sortFrontier } from "./frontier/queue";
 import { shouldReuseDocument } from "./memory/researchMemory";
 import { planResearch } from "./queryPlanner";
@@ -19,18 +19,21 @@ import {
   addEvidenceClaim,
   addEvidenceItem,
   addEvidenceRelation,
+  addResearchPlan,
   addResearchReport,
   addRunEvent,
   createResearchRun,
   findLatestFetchedDocumentByCanonicalUrl,
   getResearchJob,
   getResearchRun,
+  getLatestResearchPlanForRun,
   initResearchSchema,
   listCrawlDocumentsForRun,
   listEvidenceClaimsForRun,
   listEvidenceItemsForRun,
   listEvidenceRelationsForRun,
   listFrontierItemsForRun,
+  listPlannedQueriesForRun,
   listSearchCandidatesForRun,
   recordSourceMemory,
   updateFrontierItemStatus,
@@ -39,6 +42,8 @@ import {
   updateResearchRunStatus,
   upsertCrawlDocument,
   upsertDocumentAsset,
+  upsertDocumentLink,
+  upsertExtractedTable,
   upsertFrontierItem,
   upsertSearchCandidate,
   upsertSourceProfile,
@@ -49,8 +54,10 @@ import {
   DiscoveredCandidate,
   EvidenceItem,
   FrontierItem,
+  PlannedQuery,
   ProviderName,
   ResearchJob,
+  ResearchPlan,
   ResearchReport,
   ResearchRun,
   SearchCandidate,
@@ -134,18 +141,17 @@ export async function runDiscoveryForRun(runId: string) {
   const job = await updateResearchJobStatus(existing.id, "running") ?? existing;
   await moveRun(run, "planning", "开始规划研究查询。");
 
-  const plan = planResearch(job.topic, job.seedUrls);
-  await updateResearchJobQueryPlan(job.id, plan.queries.map((query) => query.text));
+  const plan = await resolveDiscoveryPlan(job, runId);
   await addRunEvent({
     jobId: job.id,
     runId,
     stage: "planning",
     level: "info",
-    message: "查询计划已生成。",
+    message: plan.isExisting ? "沿用已追加的查询计划。" : "查询计划已生成。",
     data: {
-      taskType: plan.taskType,
-      queryCount: plan.queries.length,
-      requiredSourceTypes: plan.requiredSourceTypes,
+      taskType: plan.value.taskType,
+      queryCount: plan.value.queries.length,
+      requiredSourceTypes: plan.value.requiredSourceTypes,
     },
   });
 
@@ -153,7 +159,7 @@ export async function runDiscoveryForRun(runId: string) {
   const discoveryProviders = createDefaultDiscoveryProviders(getResearchConfig());
   const discovered: DiscoveredCandidate[] = [];
 
-  for (const query of plan.queries) {
+  for (const query of plan.value.queries) {
     if (await shouldStop(runId)) return { candidateCount: 0 };
     const discovery = await runDiscoveryProviders(discoveryProviders, {
       jobId: job.id,
@@ -186,6 +192,34 @@ export async function runDiscoveryForRun(runId: string) {
   }
 
   return { candidateCount: storedCandidates.length };
+}
+
+async function resolveDiscoveryPlan(job: ResearchJob, runId: string): Promise<{ value: ResearchPlan; isExisting: boolean }> {
+  const existingPlan = await getLatestResearchPlanForRun(runId);
+  const existingQueries = await listPlannedQueriesForRun(runId);
+  if (existingPlan && existingQueries.length > 0) {
+    const plan = {
+      ...existingPlan,
+      queries: mergePlannedQueries(existingPlan.queries, existingQueries),
+    };
+    await updateResearchJobQueryPlan(job.id, plan.queries.map((query) => query.text));
+    return { value: plan, isExisting: true };
+  }
+
+  const plan = planResearch(job.topic, job.seedUrls, job.constraints);
+  if (existingQueries.length > 0) {
+    plan.queries = mergePlannedQueries(plan.queries, existingQueries);
+  }
+  await updateResearchJobQueryPlan(job.id, plan.queries.map((query) => query.text));
+  await addResearchPlan({ jobId: job.id, runId, plan });
+  return { value: plan, isExisting: false };
+}
+
+function mergePlannedQueries(baseQueries: PlannedQuery[], currentQueries: PlannedQuery[]) {
+  const byId = new Map<string, PlannedQuery>();
+  for (const query of baseQueries) byId.set(query.id, query);
+  for (const query of currentQueries) byId.set(query.id, query);
+  return [...byId.values()].sort((left, right) => right.priority - left.priority);
 }
 
 export async function buildFrontierForRun(runId: string) {
@@ -316,7 +350,17 @@ export async function generateReportForRun(
   }
 
   await moveRun(run, "reporting", "开始生成中文研究报告。");
-  const generated = generateMarkdownReport(job, evidence, summarizeEvidenceGraph({ claims, relations }));
+  const graphSummary = summarizeEvidenceGraph({ claims, relations });
+  const qualityGate = validateEvidenceQualityGate({ claims, evidence });
+  await addRunEvent({
+    jobId: job.id,
+    runId,
+    stage: "reporting",
+    level: qualityGate.passed ? "info" : "warn",
+    message: qualityGate.passed ? "证据质量门通过。" : "证据质量门存在待复核项。",
+    data: { ...qualityGate },
+  });
+  const generated = generateMarkdownReport(job, evidence, graphSummary, qualityGate);
   const report = await addResearchReport({ ...generated, runId });
   const completedRun = await updateResearchRunStatus(runId, "completed", "completed") ?? run;
   const completedJob = await updateResearchJobStatus(job.id, "completed") ?? job;
@@ -379,6 +423,7 @@ async function crawlFrontier(job: ResearchJob, runId: string) {
     const storedDocument = await upsertCrawlDocument(result.document);
     await recordSourceMemory(storedDocument);
     await saveCrawlAssets(storedDocument, result);
+    await saveExtractedTables(storedDocument, result);
     documents.push(storedDocument);
 
     if (storedDocument.status !== "fetched") {
@@ -391,7 +436,8 @@ async function crawlFrontier(job: ResearchJob, runId: string) {
 
     await updateFrontierItemStatus(next.id!, "fetched", { attempts: next.attempts + 1 });
     await upsertSourceProfile(createSourceProfile(storedDocument.finalUrl || storedDocument.url, next.sourceType));
-    await enqueueDiscoveredLinks(job, runId, storedDocument, result.discoveredLinks, next.depth + 1);
+    const enqueuedLinks = await enqueueDiscoveredLinks(job, runId, storedDocument, result.discoveredLinks, next.depth + 1);
+    await saveDocumentLinks(storedDocument, result, enqueuedLinks);
 
   }
 
@@ -493,6 +539,42 @@ async function saveCrawlAssets(document: CrawlDocument, result: CrawlResult) {
   }
 }
 
+async function saveExtractedTables(document: CrawlDocument, result: CrawlResult) {
+  if (!document.id || !document.runId || result.tables.length === 0) return;
+
+  for (const [index, table] of result.tables.slice(0, 20).entries()) {
+    await upsertExtractedTable({
+      jobId: document.jobId,
+      runId: document.runId,
+      documentId: document.id,
+      tableIndex: index,
+      caption: table.caption,
+      headers: table.headers,
+      rows: table.rows.slice(0, 200),
+    });
+  }
+}
+
+async function saveDocumentLinks(
+  document: CrawlDocument,
+  result: CrawlResult,
+  enqueuedLinks: Set<string>,
+) {
+  if (!document.id || !document.runId || result.documentLinks.length === 0) return;
+
+  for (const link of result.documentLinks.slice(0, 80)) {
+    await upsertDocumentLink({
+      jobId: document.jobId,
+      runId: document.runId,
+      documentId: document.id,
+      url: link.url,
+      text: link.text || link.url,
+      context: link.context,
+      enqueued: enqueuedLinks.has(link.url),
+    });
+  }
+}
+
 function rawAssetDescriptor(contentType: string, url: string): { assetType: "html" | "pdf" | "json"; extension: RawAssetExtension } | null {
   const normalizedContentType = contentType.toLowerCase();
   const normalizedUrl = url.toLowerCase();
@@ -578,7 +660,8 @@ async function enqueueDiscoveredLinks(
   links: string[],
   depth: number,
 ) {
-  if (depth > job.budget.maxDepth) return;
+  const enqueued = new Set<string>();
+  if (depth > job.budget.maxDepth) return enqueued;
 
   for (const link of links.slice(0, 30)) {
     const candidate = normalizeDiscoveredCandidate({
@@ -598,7 +681,10 @@ async function enqueueDiscoveredLinks(
     item.discoveredFromDocumentId = document.id;
     item.discoveredFromUrl = document.finalUrl || document.url;
     await upsertFrontierItem(item);
+    enqueued.add(link);
   }
+
+  return enqueued;
 }
 
 function discoveredToSearchCandidate(candidate: DiscoveredCandidate): SearchCandidate {

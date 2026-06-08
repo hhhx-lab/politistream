@@ -96,6 +96,76 @@ export function summarizeEvidenceGraph(input: {
   };
 }
 
+export interface EvidenceQualityGateResult {
+  passed: boolean;
+  totalClaims: number;
+  supportedClaims: number;
+  contradictedClaims: number;
+  uncertainClaims: number;
+  unverifiedClaims: number;
+  claimsWithEvidence: number;
+  claimsWithoutEvidence: number;
+  orphanEvidence: number;
+  issues: string[];
+}
+
+export function validateEvidenceQualityGate(input: {
+  claims: Array<{
+    id?: string;
+    status: EvidenceClaimStatus | string;
+    supportingEvidenceIds?: string[];
+    conflictingEvidenceIds?: string[];
+  }>;
+  evidence: Array<{ id?: string; claimId?: string }>;
+}): EvidenceQualityGateResult {
+  const evidenceIds = new Set(input.evidence.map((item) => item.id).filter(Boolean));
+  const linkedEvidenceIds = new Set<string>();
+  const issues: string[] = [];
+  let claimsWithEvidence = 0;
+
+  for (const claim of input.claims) {
+    const claimId = claim.id ?? "unknown-claim";
+    const supporting = claim.supportingEvidenceIds ?? [];
+    const conflicting = claim.conflictingEvidenceIds ?? [];
+    const linked = [...supporting, ...conflicting].filter((id) => evidenceIds.has(id));
+    for (const id of linked) linkedEvidenceIds.add(id);
+    if (linked.length > 0) claimsWithEvidence += 1;
+
+    if ((claim.status === "supported" || claim.status === "contradicted") && linked.length === 0) {
+      issues.push(`claim_without_linked_evidence:${claimId}:${claim.status}`);
+    }
+    if (claim.status === "supported" && supporting.length === 0) {
+      issues.push(`supported_claim_without_support:${claimId}`);
+    }
+    if (claim.status === "contradicted" && conflicting.length === 0) {
+      issues.push(`contradicted_claim_without_conflict:${claimId}`);
+    }
+    if ((claim.status === "uncertain" || claim.status === "unverified") && supporting.length === 0 && conflicting.length === 0) {
+      issues.push(`explicit_uncertainty_without_evidence:${claimId}`);
+    }
+  }
+
+  for (const item of input.evidence) {
+    if (item.id && !linkedEvidenceIds.has(item.id) && !item.claimId) {
+      issues.push(`orphan_evidence:${item.id}`);
+    }
+  }
+
+  const totalClaims = input.claims.length;
+  return {
+    passed: issues.length === 0 && totalClaims > 0,
+    totalClaims,
+    supportedClaims: input.claims.filter((claim) => claim.status === "supported").length,
+    contradictedClaims: input.claims.filter((claim) => claim.status === "contradicted").length,
+    uncertainClaims: input.claims.filter((claim) => claim.status === "uncertain").length,
+    unverifiedClaims: input.claims.filter((claim) => claim.status === "unverified").length,
+    claimsWithEvidence,
+    claimsWithoutEvidence: Math.max(0, totalClaims - claimsWithEvidence),
+    orphanEvidence: issues.filter((issue) => issue.startsWith("orphan_evidence:")).length,
+    issues,
+  };
+}
+
 function authorityTierFor(domain: string, sourceType: SourceType): AuthorityTier {
   if (sourceType === "official" || sourceType === "regulatory" || domain.endsWith(".gov") || domain.endsWith(".mil")) return "T0";
   if (sourceType === "mainstream-news" || sourceType === "academic") return "T1";
