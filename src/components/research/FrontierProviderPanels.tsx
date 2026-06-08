@@ -124,6 +124,7 @@ export const ProviderPanel: React.FC<{
   onOpenDataLab?: () => void;
 }> = ({ stats, providers, copy, t, run, exporting, onExportDataSources, onOpenDataLab }) => (
   <Panel title={t('research.providerPanel')}>
+    <p className="mb-3 border border-stone-300 bg-white/70 px-3 py-2 text-xs leading-5 text-stone-600">{copy.providerExplanation}</p>
     {stats.length === 0 ? (
       <p className="font-mono text-xs opacity-60">{t('research.noProviders')}</p>
     ) : (
@@ -199,6 +200,7 @@ const DataSourceCoveragePanel: React.FC<{
         </div>
       </div>
       <p className="mb-3 text-xs leading-5 text-stone-600">{copy.dataSourceExportHint}</p>
+      <p className="mb-3 border border-stone-300 bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-700">{copy.dataSourceDatasetExplanation}</p>
       <div className="grid grid-cols-2 gap-2">
         {counts.map((item) => (
           <div key={item.type} className="border border-stone-300 bg-stone-100 p-2 min-w-0">

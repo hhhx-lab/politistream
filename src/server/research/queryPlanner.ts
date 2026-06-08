@@ -37,14 +37,16 @@ export function planResearch(topic: string, seedUrls: string[] = [], constraints
   const normalizedConstraints = normalizeResearchConstraints(constraints);
   const taskType = classifyTask(normalizedTopic);
   const requiredSourceTypes = mergeSourceTypes(requiredSourcesForTask(taskType), normalizedConstraints.sourceScope?.sourceTypes);
-  const queries = buildQueries(normalizedTopic, seedUrls, taskType, normalizedConstraints);
+  const planningAgent = buildResearchPlanningAgent(normalizedTopic, taskType);
+  const queryTopic = planningAgent.topicCore || normalizedTopic;
+  const queries = buildQueries(queryTopic, seedUrls, taskType, normalizedConstraints, planningAgent);
 
   return {
     taskType,
     topic,
     normalizedTopic,
     claim: taskType === "verification" ? normalizedTopic : undefined,
-    subQuestions: subQuestionsForTask(taskType),
+    subQuestions: planningAgent.subQuestions,
     languages: normalizedConstraints.languages?.length ? normalizedConstraints.languages : inferLanguages(normalizedTopic),
     freshness: inferFreshness(normalizedTopic, taskType, normalizedConstraints),
     requiredSourceTypes,
@@ -86,7 +88,7 @@ function classifyTask(topic: string): ResearchTaskType {
     return "data-research";
   }
 
-  if (matches(lower, ["竞品", "competitor", "market map", "市场"])) {
+  if (matches(lower, ["市场", "消费人群", "购买", "销量", "销售", "出生率", "结婚率", "渗透率", "人群画像", "market", "consumer", "demographic", "sales", "birth rate", "fertility"])) {
     return "competitive";
   }
 
@@ -171,10 +173,258 @@ function subQuestionsForTask(taskType: ResearchTaskType): string[] {
   }
 }
 
-function buildQueries(topic: string, seedUrls: string[], taskType: ResearchTaskType, constraints: ResearchConstraints): PlannedQuery[] {
+interface ResearchPlanningAgentResult {
+  topicCore: string;
+  explicitDimensions: string[];
+  inferredDimensions: string[];
+  subQuestions: string[];
+  queryExpansions: Array<{
+    text: string;
+    purpose: QueryPurpose;
+    sourceTypes: SourceType[];
+    priority: number;
+  }>;
+}
+
+function buildResearchPlanningAgent(topic: string, taskType: ResearchTaskType): ResearchPlanningAgentResult {
+  const topicCore = extractTopicCore(topic);
+  const explicitDimensions = inferExplicitDimensions(topic);
+  const inferredDimensions = inferInferredDimensions(topic, taskType, explicitDimensions);
+  const subQuestions = dedupeStrings([
+    ...topicSpecificSubQuestions(topicCore, taskType, explicitDimensions, inferredDimensions),
+    ...subQuestionsForTask(taskType),
+  ]).slice(0, 18);
+  const queryExpansions = topicSpecificQueryExpansions(topic, topicCore, taskType, explicitDimensions, inferredDimensions);
+
+  return {
+    topicCore,
+    explicitDimensions,
+    inferredDimensions,
+    subQuestions,
+    queryExpansions,
+  };
+}
+
+function extractTopicCore(topic: string) {
+  const normalized = cleanText(topic)
+    .replace(/^研究一下/, "")
+    .replace(/^帮我(调查|研究|查找|查证)?/, "")
+    .replace(/比如.+$/, "")
+    .replace(/等等$/, "")
+    .replace(/[，。；;:：]+$/g, "")
+    .trim();
+  return normalized || topic;
+}
+
+function inferExplicitDimensions(topic: string) {
+  const dimensions: string[] = [];
+  const rules: Array<[string, string[]]> = [
+    ["消费人群", ["消费人群", "购买人群", "用户画像", "年龄", "性别", "收入", "职业"]],
+    ["地区", ["地区", "地域", "城市", "省份", "区域"]],
+    ["购买时间段", ["购买时间", "时间段", "时段", "季节", "节假日", "夜间", "月份"]],
+    ["出生率", ["出生率", "生育率", "人口出生", "fertility", "birth rate"]],
+    ["结婚率", ["结婚率", "婚姻", "婚育"]],
+    ["价格", ["价格", "客单价", "定价", "pricing"]],
+    ["渠道", ["渠道", "电商", "线下", "药店", "便利店", "平台"]],
+    ["品牌/竞品", ["品牌", "竞品", "竞争", "份额"]],
+    ["数据源", ["数据源", "dataset", "公开数据", "统计"]],
+    ["趋势", ["趋势", "变化", "增长", "下降", "近年", "历史"]],
+  ];
+
+  for (const [dimension, needles] of rules) {
+    if (matches(topic.toLowerCase(), needles)) dimensions.push(dimension);
+  }
+  return dedupeStrings(dimensions);
+}
+
+function inferInferredDimensions(topic: string, taskType: ResearchTaskType, explicitDimensions: string[]) {
+  const dimensions = [
+    "核心定义与研究边界",
+    "主流来源与官方来源",
+    "数据口径与可验证性",
+    "时间线与趋势",
+    "反证与不确定性",
+  ];
+  const lower = topic.toLowerCase();
+  if (taskType === "competitive" || matches(lower, ["市场", "购买", "消费", "用户", "品牌", "竞品"])) {
+    dimensions.push("市场规模与渗透率", "人群细分", "渠道与平台", "品牌竞争", "价格带");
+  }
+  if (taskType === "data-research" || explicitDimensions.includes("数据源")) {
+    dimensions.push("可下载数据集", "结构化 API", "统计建模变量", "可视化输出");
+  }
+  if (explicitDimensions.includes("出生率") || explicitDimensions.includes("结婚率")) {
+    dimensions.push("人口统计指标", "相关性与滞后关系", "地区面板数据");
+  }
+  if (matches(lower, ["新闻", "查证", "溯源", "真假"])) {
+    dimensions.push("原始出处", "传播链路", "更正与辟谣");
+  }
+  return dedupeStrings(dimensions);
+}
+
+function topicSpecificSubQuestions(
+  topicCore: string,
+  taskType: ResearchTaskType,
+  explicitDimensions: string[],
+  inferredDimensions: string[],
+) {
+  const questions: string[] = [
+    `${topicCore} 的核心概念、研究边界和排除范围是什么`,
+    `${topicCore} 目前有哪些官方统计、行业报告、平台数据或学术研究可以引用`,
+    `${topicCore} 的数据口径分别是什么，样本、时间范围、地域范围和统计单位是否一致`,
+  ];
+
+  const addIf = (dimension: string, rows: string[]) => {
+    if (explicitDimensions.includes(dimension) || inferredDimensions.includes(dimension)) questions.push(...rows);
+  };
+
+  addIf("市场规模与渗透率", [
+    `${topicCore} 的市场规模、销量、销售额、渗透率和近年趋势如何变化`,
+    `${topicCore} 的增长或下降与政策、人口结构、消费观念、渠道变化分别有什么关系`,
+  ]);
+  addIf("消费人群", [
+    `${topicCore} 的主要消费人群如何按年龄、性别、收入、婚恋状态和城市层级细分`,
+    `${topicCore} 不同消费人群的购买动机、价格敏感度、品牌偏好和隐私需求有什么差异`,
+  ]);
+  addIf("地区", [
+    `${topicCore} 在一线、新一线、低线城市和不同省份/区域的消费差异是什么`,
+    `${topicCore} 的地区差异是否可以与人口、收入、教育、医疗资源或婚育指标交叉验证`,
+  ]);
+  addIf("购买时间段", [
+    `${topicCore} 的购买时间段是否存在月份、节假日、工作日/周末、白天/夜间等规律`,
+    `${topicCore} 的平台搜索热度、订单时间和线下渠道是否呈现不同时间模式`,
+  ]);
+  addIf("出生率", [
+    `${topicCore} 与出生率、生育率、避孕率、结婚率之间可能有哪些相关性和滞后关系`,
+    `${topicCore} 与出生率的关系需要控制哪些混杂变量，例如收入、城市化、婚姻登记和年龄结构`,
+  ]);
+  addIf("结婚率", [
+    `${topicCore} 与结婚率、婚育年龄、同居行为和性健康教育之间有什么可验证关系`,
+  ]);
+  addIf("渠道与平台", [
+    `${topicCore} 在线上电商、即时零售、药店、商超、便利店等渠道的表现有什么差异`,
+    `${topicCore} 在淘宝/天猫、京东、美团/即时零售、抖音等平台可以找到哪些公开信号`,
+  ]);
+  addIf("品牌竞争", [
+    `${topicCore} 的主要品牌、价格带、产品类型和市场份额如何分布`,
+    `${topicCore} 的国产与国际品牌、普通产品与高端产品有什么差异`,
+  ]);
+  addIf("数据口径与可验证性", [
+    `${topicCore} 哪些结论只有商业报告二手引用，哪些能回到官方、平台或原始数据`,
+    `${topicCore} 相关数据是否存在样本偏差、平台偏差、广告软文或不可复现问题`,
+  ]);
+  addIf("可视化输出", [
+    `${topicCore} 最适合用哪些统计图、地图、时间序列图、相关矩阵或分组对比图表达`,
+  ]);
+
+  if (taskType === "tool-evaluation") {
+    questions.push(
+      `${topicCore} 的候选工具如何按功能、格式、价格、部署方式和活跃度分层`,
+      `${topicCore} 的真实用户反馈、issue、benchmark 和失败案例分别说明什么`,
+    );
+  }
+
+  return dedupeStrings(questions);
+}
+
+function topicSpecificQueryExpansions(
+  topic: string,
+  topicCore: string,
+  taskType: ResearchTaskType,
+  explicitDimensions: string[],
+  inferredDimensions: string[],
+): ResearchPlanningAgentResult["queryExpansions"] {
+  const rows: ResearchPlanningAgentResult["queryExpansions"] = [];
+  const topicKeywords = topicKeywordPhrase(topicCore);
+  const topicSubject = topicSubjectPhrase(topicCore);
+  const add = (text: string, purpose: QueryPurpose, sourceTypes: SourceType[], priority: number) => {
+    rows.push({ text, purpose, sourceTypes, priority });
+  };
+
+  for (const dimension of dedupeStrings([...explicitDimensions, ...inferredDimensions]).slice(0, 10)) {
+    if (dimension === "消费人群" || dimension === "人群细分") {
+      add(`${topicKeywords} 消费人群 年龄 性别 收入 用户画像`, "statistical-source", ["dataset", "academic", "mainstream-news"], 91);
+    } else if (dimension === "地区") {
+      add(`${topicKeywords} 地区 城市 省份 区域 差异`, "statistical-source", ["dataset", "official", "academic"], 90);
+    } else if (dimension === "购买时间段") {
+      add(`${topicSubject} 电商 销售 时间段 时段 月份`, "statistical-source", ["dataset", "company", "mainstream-news"], 90);
+    } else if (dimension === "出生率" || dimension === "人口统计指标") {
+      add(`${topicSubject} 出生率 相关性`, "statistical-source", ["official", "structured-api", "academic"], 92);
+      add(`${topicSubject} 出生率 生育率 结婚率 年龄结构`, "statistical-source", ["official", "structured-api", "academic"], 87);
+    } else if (dimension === "结婚率") {
+      add(`${topicSubject} 结婚率 婚育 相关性`, "statistical-source", ["official", "structured-api", "academic"], 88);
+    } else if (dimension === "渠道与平台" || dimension === "渠道") {
+      add(`${topicSubject} 电商 平台 销售 渠道 药店 便利店`, "overview", ["company", "mainstream-news", "dataset"], 87);
+    } else if (dimension === "品牌竞争" || dimension === "品牌/竞品") {
+      add(`${topicSubject} 品牌 份额 价格带 竞品`, "overview", ["company", "mainstream-news", "benchmark"], 86);
+    } else if (dimension === "数据口径与可验证性" || dimension === "数据源") {
+      add(`${topicKeywords} 数据源 统计口径 原始数据 报告`, "dataset-discovery", ["dataset", "data-catalog", "official"], 89);
+    } else if (dimension === "可视化输出") {
+      add(`${topicKeywords} 可视化 统计图 时间序列 地图 相关性`, "visualization", ["dataset", "benchmark"], 70);
+    }
+  }
+
+  if (taskType === "competitive") {
+    add(`${topicSubject} market size report China`, "overview", ["mainstream-news", "academic", "company"], 84);
+    add(`${topicKeywords} 行业报告 市场规模 消费者 调研`, "overview", ["mainstream-news", "academic", "company"], 85);
+  }
+  if (/[\u4e00-\u9fff]/.test(topic)) {
+    add(`${topicSubject} 国家统计局 人口 出生率`, "statistical-source", ["official", "structured-api"], 83);
+    add(`${topicKeywords} 艾媒 咨询 行业 报告 消费者`, "overview", ["mainstream-news", "company"], 76);
+  }
+
+  return rows;
+}
+
+function topicKeywordPhrase(topicCore: string) {
+  const normalized = cleanText(topicCore);
+  if (!normalized || /\s/.test(normalized) || !/[\u4e00-\u9fff]/.test(normalized)) return normalized;
+
+  const scopeWords = ["中国", "全球", "美国", "欧洲", "日本", "韩国", "东南亚", "国内", "海外"];
+  const categoryWords = ["市场", "行业", "工具", "平台", "数据源", "新闻", "比赛", "赛事", "政策", "报告"];
+  const parts: string[] = [];
+  let rest = normalized;
+
+  for (const scope of scopeWords) {
+    if (rest.startsWith(scope)) {
+      parts.push(scope);
+      rest = rest.slice(scope.length);
+      break;
+    }
+  }
+
+  let suffix = "";
+  for (const category of categoryWords) {
+    if (rest.endsWith(category) && rest.length > category.length) {
+      suffix = category;
+      rest = rest.slice(0, -category.length);
+      break;
+    }
+  }
+
+  if (rest) parts.push(rest);
+  if (suffix) parts.push(suffix);
+  return parts.length > 1 ? parts.join(" ") : normalized;
+}
+
+function topicSubjectPhrase(topicCore: string) {
+  const parts = topicKeywordPhrase(topicCore).split(/\s+/).filter(Boolean);
+  const scopeWords = new Set(["中国", "全球", "美国", "欧洲", "日本", "韩国", "东南亚", "国内", "海外"]);
+  const categoryWords = new Set(["市场", "行业", "工具", "平台", "数据源", "新闻", "比赛", "赛事", "政策", "报告"]);
+  const subjectParts = parts.filter((part) => !scopeWords.has(part) && !categoryWords.has(part));
+  return subjectParts.join(" ") || parts.join(" ") || topicCore;
+}
+
+function buildQueries(
+  topic: string,
+  seedUrls: string[],
+  taskType: ResearchTaskType,
+  constraints: ResearchConstraints,
+  planningAgent: ResearchPlanningAgentResult,
+): PlannedQuery[] {
   const builder = createQueryBuilder(buildConstraintSuffix(constraints));
 
   addOverviewQueries(builder, topic);
+  addPlanningAgentQueries(builder, planningAgent);
 
   switch (taskType) {
     case "verification":
@@ -210,7 +460,13 @@ function buildQueries(topic: string, seedUrls: string[], taskType: ResearchTaskT
     }
   }
 
-  return builder.list().slice(0, 20);
+  return builder.list().slice(0, 32);
+}
+
+function addPlanningAgentQueries(builder: QueryBuilder, planningAgent: ResearchPlanningAgentResult) {
+  for (const expansion of planningAgent.queryExpansions) {
+    builder.add(expansion.text, expansion.purpose, expansion.sourceTypes, expansion.priority);
+  }
 }
 
 function addOverviewQueries(builder: QueryBuilder, topic: string) {
@@ -257,10 +513,11 @@ function addTechnicalQueries(builder: QueryBuilder, topic: string) {
 }
 
 function addCompetitiveQueries(builder: QueryBuilder, topic: string) {
-  builder.add(`${topic} official pricing`, "pricing", ["official", "company"], 90);
-  builder.add(`${topic} competitors comparison`, "overview", ["mainstream-news", "benchmark"], 82);
-  builder.add(`${topic} customer reviews`, "community-feedback", ["community"], 70);
-  builder.add(`${topic} market report`, "overview", ["academic", "mainstream-news"], 68);
+  builder.add(`${topic} 行业报告 市场规模`, "overview", ["academic", "mainstream-news"], 90);
+  builder.add(`${topic} 消费者 调研 人群画像`, "overview", ["mainstream-news", "benchmark"], 82);
+  builder.add(`${topic} 渠道 电商 线下 销售`, "statistical-source", ["company", "dataset", "mainstream-news"], 78);
+  builder.add(`${topic} 品牌 份额 竞争格局`, "overview", ["company", "mainstream-news", "benchmark"], 74);
+  builder.add(`${topic} 社区讨论 用户反馈`, "community-feedback", ["community"], 64);
 }
 
 function addDataResearchQueries(builder: QueryBuilder, topic: string) {
@@ -425,6 +682,19 @@ function normalizeList(values?: Array<string | undefined | null>) {
     .map((value) => cleanText(value))
     .filter((value): value is string => Boolean(value));
   return [...new Set(items)];
+}
+
+function dedupeStrings(values: string[]) {
+  const seen = new Set<string>();
+  const rows: string[] = [];
+  for (const value of values) {
+    const normalized = cleanText(value);
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+    rows.push(normalized);
+  }
+  return rows;
 }
 
 const SOURCE_TYPE_VALUES: SourceType[] = [

@@ -223,14 +223,15 @@ const PressureSmokeResult: React.FC<{ result: PressureSmokeResultSummary | null;
       {result.targets.map((target) => (
         <div key={target.mode} className="border-b border-stone-200 pb-2 last:border-b-0">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-serif text-base">{target.mode} / {target.maxUrlsPerRun} URL</span>
+            <span className="font-serif text-base">能力目标 / {target.mode}</span>
             <span className={`border px-1.5 py-0.5 font-mono text-[9px] uppercase ${statusClass(target.status === 'passed' ? 'passed' : 'failed')}`}>{target.status}</span>
           </div>
           <div className="mt-1 grid grid-cols-3 gap-2">
-            <MiniMetric label={copy.plannedQueries} value={target.plannedQueries} />
-            <MiniMetric label={copy.frontierCapacity} value={target.estimatedFrontierCapacity} />
+            <MiniMetric label="URL 预算" value={target.maxUrlsPerRun} />
+            <MiniMetric label="域名预算" value={target.maxDomainsPerRun} />
             <MiniMetric label={copy.evidenceTarget} value={target.evidenceTarget} />
           </div>
+          <p className="mt-2 text-[11px] leading-4 text-stone-600">这是 Quick/Standard/Deep 的压测预算模板，用来验收爬虫能力上限，不代表当前 run 已经抓到这些 URL。</p>
         </div>
       ))}
     </div>
@@ -486,16 +487,18 @@ const ProviderGroup: React.FC<{
 const PressureCard: React.FC<{ target: ResearchPressureTargetSummary; copy: ResearchPanelCopy }> = ({ target, copy }) => (
   <div className="border border-stone-300 bg-stone-100 p-3">
     <div className="flex items-center justify-between gap-2">
-      <div className="font-serif text-lg">{target.mode} / {target.maxUrlsPerRun} URL</div>
+      <div className="font-serif text-lg">能力目标 / {target.mode}</div>
       <span className={`border px-1.5 py-0.5 font-mono text-[9px] uppercase ${target.status === 'implemented' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}>
         {target.status === 'implemented' ? copy.implemented : copy.needsPressureSmoke}
       </span>
     </div>
     <div className="mt-2 grid grid-cols-3 gap-2">
       <MiniMetric label={copy.depthLabel} value={target.maxDepth} />
+      <MiniMetric label="URL 预算" value={target.maxUrlsPerRun} />
       <MiniMetric label={copy.domainsLabel} value={target.maxDomainsPerRun} />
       <MiniMetric label={copy.evidenceTarget} value={target.evidenceTarget} />
     </div>
+    <p className="mt-2 text-[11px] leading-4 text-stone-600">能力目标用于说明不同模式的预算和验收标准，不是当前任务真实抓取数量。</p>
   </div>
 );
 

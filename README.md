@@ -7,7 +7,7 @@ PolitiStream 是一个用 TypeScript 写的新闻抓取、RSS 监控和深度研
 - 前端通过 Vite proxy 将 `/api/*` 转发到后端。
 - RSS 抓取层用 `rss-parser` 批量读取默认源和用户新增源。
 - 正文补全层按 Jina Reader、公开代理、Puppeteer、直连 Axios 的顺序尝试提取文章正文。
-- AI 层用 Gemini 对新闻做中文摘要、情感分值和实体提取。
+- AI 层统一走 GPT 中转站，对新闻做中文摘要、情感分值和实体提取。
 - 新闻/RSS 存储层用 SQLite，本地数据库文件为 `news.db`。
 - 深度研究存储层用 Postgres，长任务通过 Redis/BullMQ 入队，由后台 worker 执行。
 - 前端用 React 展示搜索首页、研究任务、RSS 源管理、新闻流、收藏夹和 AI 待处理队列。
@@ -25,7 +25,7 @@ RSS feeds
      -> processMissingSummaries 后台小批量补 AI 分析
      -> 单篇分析时按需抓全文
   -> src/server/services/ai.ts
-     -> Gemini 生成中文摘要、情感分值、实体列表
+     -> GPT 中转站生成中文摘要、情感分值、实体列表
   -> src/server/services/storage.ts
      -> 将已分析新闻归档为 Markdown
   -> src/server/db.ts
@@ -65,7 +65,7 @@ RSS feeds
 │   │   ├── research/              # Research job、provider、crawler、report
 │   │   └── services/
 │   │       ├── rss.ts             # RSS 抓取、正文提取、AI 调度
-│   │       ├── ai.ts              # Gemini 分析封装
+│   │       ├── ai.ts              # GPT 中转站分析封装
 │   │       └── storage.ts         # Markdown 归档
 │   ├── types.ts                   # 前后端共享类型
 │   ├── main.tsx                   # React 挂载入口
@@ -132,9 +132,9 @@ RSS_REFRESH_ON_STARTUP=true
 
 AI 逻辑在 `src/server/services/ai.ts`。
 
-AI 会优先读取 `AI_PROVIDER`、`OPENAI_API_KEY` 和 `AI_MODEL`。当前默认模型名是 `gpt-5.4`，优先走 OpenAI 的 structured output；如果 OpenAI 没配好，系统会回退到 `GEMINI_API_KEY` 对应的 Gemini 路线。两边都没有时，系统会返回一段“AI disabled”的摘要，其他流程仍可运行。
+AI 只读取三项配置：`AI_BASE_URL`、`AI_API_KEY` 和 `AI_MODEL`。`AI_BASE_URL` 填 GPT 中转站的 OpenAI-compatible base URL，推荐以 `/v1` 结尾；后端会调用 chat completions 接口并要求模型只返回 JSON。没有 `AI_API_KEY` 时，系统会返回一段“AI disabled”的摘要，其他流程仍可运行。
 
-`analyzeContent(title, snippet, url?)` 默认使用 OpenAI 的 `gpt-5.4`；如果回退到 Gemini，则会使用 `gemini-2.0-flash`。
+`analyzeContent(title, snippet, url?)` 默认使用 `.env` 中的 `AI_MODEL`，缺省为 `gpt-5.4`。
 
 输出结构为：
 
@@ -319,9 +319,7 @@ API 入口在 `server.ts`。
 ```bash
 npm install
 cp .env.example .env
-docker compose up -d postgres redis
-npm run check:postgres
-npm run dev
+npm run start:all
 ```
 
 然后打开：
@@ -341,11 +339,9 @@ API_URL=""
 DISABLE_HMR=false
 RSS_REFRESH_ON_STARTUP=false
 
-GEMINI_API_KEY=""
-AI_PROVIDER="openai"
-OPENAI_API_KEY=""
+AI_BASE_URL="https://api.openai.com/v1"
+AI_API_KEY=""
 AI_MODEL="gpt-5.4"
-OPENAI_MODEL=""
 DATABASE_URL="postgres://politistream:politistream@localhost:15432/politistream"
 REDIS_URL="redis://localhost:16379"
 RESEARCH_WORKER_CONCURRENCY=2
@@ -385,6 +381,7 @@ NEWSAPI_KEY=""
 NEWS_API_KEY=""
 GITHUB_TOKEN=""
 FRED_API_KEY=""
+KAGGLE_API_TOKEN=""
 KAGGLE_USERNAME=""
 KAGGLE_KEY=""
 FIRECRAWL_API_KEY=""
@@ -393,15 +390,18 @@ RESEARCH_BROWSER_PROVIDER="local"
 BROWSERLESS_URL=""
 ```
 
-只看 RSS 新闻时可以不配置 Postgres/Redis/AI/Search Provider。完整深度研究至少需要 `DATABASE_URL`、`REDIS_URL` 和一个搜索 provider key。Data Lab 默认也强制使用 Postgres 保存 datasets/jobs/artifacts；本仓库自带的 `docker-compose.yml` 会把 Postgres 暴露到 `15432`、Redis 暴露到 `16379`，避免误连其它项目占用的 `5432/6379`。`npm run check:postgres` 可以验证当前 `.env` 是否真的连到了项目专用 Postgres。`ANALYTICS_ALLOW_LOCAL_FALLBACK=true` 只用于临时离线开发或 CI smoke，正式研究和长期数据资产不要依赖本地 JSON store。没有可用 AI provider 时，Research planner 仍会使用规则策略生成结构化 query plan；没有搜索 provider key 时，UI 会显示 provider 缺失状态。`GITHUB_TOKEN` 可选，用于提高 GitHub discovery/extractor 的 API 限额。
+只看 RSS 新闻时可以不配置 Postgres/Redis/AI/Search Provider。完整深度研究至少需要 `DATABASE_URL`、`REDIS_URL` 和一个搜索 provider key。Data Lab 默认也强制使用 Postgres 保存 datasets/jobs/artifacts；本仓库自带的 `docker-compose.yml` 会把 Postgres 暴露到 `15432`、Redis 暴露到 `16379`，避免误连其它项目占用的 `5432/6379`。`npm run check:postgres` 可以验证当前 `.env` 是否真的连到了项目专用 Postgres。`ANALYTICS_ALLOW_LOCAL_FALLBACK=true` 只用于临时离线开发或 CI smoke，正式研究和长期数据资产不要依赖本地 JSON store。没有可用 GPT 中转站 key 时，Research planner 仍会使用规则策略生成结构化 query plan；没有搜索 provider key 时，UI 会显示 provider 缺失状态。`GITHUB_TOKEN` 可选，用于提高 GitHub discovery/extractor 的 API 限额。
 
-Agent 与 Analytics 的默认模型配置由 `AI_PROVIDER`、`OPENAI_API_KEY` 和 `AI_MODEL` 控制，默认模型名为 `gpt-5.4`，同时保留 `GEMINI_API_KEY` 作为回退路线；可直接在 `.env` 中替换。FRED、Kaggle、Firecrawl、Crawl4AI、Browserless 都是可选增强；未配置时系统会保留入口并降级到本地或公开 provider。
+Agent、Research 与 Analytics 的默认模型配置由 `AI_BASE_URL`、`AI_API_KEY` 和 `AI_MODEL` 控制，默认模型名为 `gpt-5.4`；可直接在 `.env` 中替换成你的 GPT 中转站地址、key 和模型名。FRED、Kaggle、Firecrawl、Crawl4AI、Browserless 都是可选增强；未配置时系统会保留入口并降级到本地或公开 provider。
 
 Data Lab 的 Python worker 由 `ANALYTICS_PYTHON_BIN`、`ANALYTICS_WORKER_DIR` 和 `ANALYTICS_WORKER_TIMEOUT_MS` 控制。建议用 `uv` 或 conda 给 `workers-analytics/` 建独立环境，不要使用 `sudo pip` 或混用系统 Python/Homebrew Python。本地推荐 `ANALYTICS_WORKER_DIR="workers-analytics"` 搭配 `ANALYTICS_PYTHON_BIN=".venv/bin/python"`。`ANALYTICS_IMPORT_MAX_ROWS` 控制多格式导入最多解析多少行，默认 50,000；`ANALYTICS_MATERIALIZE_MAX_ROWS` 控制从研究数据源资产清单抓取 CSV/JSON/API 快照后最多落多少行；`ANALYTICS_MATERIALIZE_BATCH_LIMIT` 控制批量 materialize 单次最多处理多少个候选 URL；`ANALYTICS_SOURCE_FETCH_TIMEOUT_MS` 和 `ANALYTICS_SOURCE_MAX_BYTES` 控制远程数据源抓取超时与大小上限；`ANALYTICS_SOURCE_ALLOW_PRIVATE_NETWORKS=false` 会默认拦截 localhost/私网 URL，防止 Research 候选源被滥用成 SSRF/内网探测入口。Postgres 保存完整 rows 供 worker 分析，前端列表只返回 500 行预览以保持页面轻量。当前 worker 已接入 `/api/analytics/datasets/:id/analyze`，会把 profile/statistics/quality/frequency/crosstab/tests/regression/logistic/poisson/dimension/cluster/anomaly/timeseries/transform/cleaning/news/text/explain/deepml/geo/chart/report/export 结果保存为 analytics job 和 artifact；图表规格由 `/api/analytics/visualizations/render` 保存为 visualization artifact。
+
+`npm run start:all` 是本地完整启动入口：它会读取 `.env`，创建 `.data` 运行目录，自动 `docker compose up -d postgres redis`，如果 `CRAWL4AI_URL` 指向本机还会启动 `unclecode/crawl4ai` 容器，随后启动 Express 后端、Research BullMQ workers 和 Vite 前端，并等待健康检查通过。只想连接已有 Postgres/Redis 时可运行 `npm run start:all -- --skip-infra`；只想跳过本机 Crawl4AI 容器时可运行 `npm run start:all -- --skip-crawl4ai`。完整 Data Lab Python 能力仍需先按下方 worker 命令建好 `workers-analytics/.venv`。
 
 ## 常用脚本
 
 ```bash
+npm run start:all     # 全能力一键启动：Postgres、Redis、可选 Crawl4AI、后端、Research workers、前端
 npm run dev           # 一键启动前后端
 npm run dev:frontend  # 只启动 Vite 前端，默认 3000
 npm run dev:backend   # 只启动 Express 后端，默认 3001

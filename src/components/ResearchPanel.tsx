@@ -1,9 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   ArrowLeft,
   Ban,
   BarChart3,
   CirclePause,
+  ClipboardList,
+  FileSearch,
+  FileText,
+  Gauge,
+  ListFilter,
+  Network,
   Play,
   RefreshCw,
   Search,
@@ -40,7 +47,7 @@ import {
   SourceProfileSummary,
 } from '../types';
 import { Language, Translator } from '../i18n';
-import { ClaimsPanel, EvidenceGraphPanel, EvidenceTable } from './research/EvidencePanels';
+import { ClaimsPanel, EvidenceGraphPanel, EvidenceQualityPanel, EvidenceTable } from './research/EvidencePanels';
 import { FrontierPanel, ProviderPanel, RuntimeMonitorPanel } from './research/FrontierProviderPanels';
 import { CapabilityAuditPanel } from './research/CapabilityAuditPanel';
 import {
@@ -60,6 +67,7 @@ import {
   labelForStatus,
   Metric,
   Panel,
+  summarizeDocuments,
   summarizeFrontier,
   summarizeProviders,
 } from './research/shared';
@@ -77,16 +85,30 @@ const panelText = {
   zh: {
     exportToDataLab: '导出到 Data Lab',
     openDataLab: '打开 Data Lab',
-    exportDataSourcesToDataLab: '导入数据源候选',
-    dataSourceExportHint: '把 data-catalog、structured-api、competition-data、sports-data provider 与 frontier 生成 Data Lab 数据源资产清单。',
+    exportDataSourcesToDataLab: '生成 Data Lab 数据源清单',
+    dataSourceExportHint: '这里生成的是“可分析数据源清单”，不是最终统计表：每一行对应一个数据集/API/比赛数据/体育数据候选，包含 provider、来源类型、URL、优先级、格式线索、许可提示和是否可导入。',
+    dataSourceDatasetExplanation: '下一步：Data Lab → 数据源资产 → 按来源质量/可导入性筛选 → 导入数据快照 → 数据集/分析向导。只有 materialize 成快照后，才会变成可统计、可画图的数据表。',
     dataSourceExported: '数据源候选已导入 Data Lab。',
     dataSourceRows: '条数据源',
     runtimeMonitor: '运行监控',
     runtimeMonitorHint: '观察 BullMQ discovery 队列和全局 discovery provider 健康，确认深度研究是否真的在排队、抓取和产出候选。',
+    runTransparency: '本次研究进度解释',
+    runTransparencyFailed: '这次 run 已失败：系统只保留已完成的发现、frontier 和部分抓取结果；还没有进入证据抽取和报告生成，所以这里不会有可靠结论。',
+    runTransparencyInProgress: '这次 run 还在进行中：Provider 调用会先产生候选 URL，Frontier 再按优先级抓取，之后才会抽取证据和生成报告。',
+    runTransparencyCompleted: '这次 run 已完成：可以在“来源浏览”看网页原文，在“证据”看结论依据，在“报告”看中文总结。',
+    runStageHint: '当前阶段',
+    runNoClaimsHint: '尚未生成结论。通常表示 run 还没有进入分析阶段，或抓取阶段失败/可用正文不足。',
+    documentCountHint: '文档数包含已抓取、抓取失败和复用记录；文档检索会混合搜索标题、URL、正文、外链、抽取表格、证据片段和资产元数据。',
+    lastError: '最近错误',
+    noReportBecauseFailed: '当前 run 已失败，报告不会自动生成。请先看“来源浏览”的失败原因，或在“总览”重试失败项后继续分析。',
+    fetchedDocuments: '已抓取',
+    failedDocuments: '失败文档',
+    reusedDocuments: '复用文档',
     queueHealth: '队列健康',
     providerHealth: 'Provider 健康',
     dataSourceCoverage: '数据源覆盖',
     providerDetails: 'Provider 明细',
+    providerExplanation: 'Provider 是“发现来源/搜索通道”，不是最终结论来源。例如 SerpApi/Tavily/NewsAPI 负责找网页，CKAN/Kaggle/WorldBank 负责找数据集，official/sitemap/GitHub 负责补官网、站点地图和代码仓库。Provider 数表示调用记录，不等于已读完的网页数。',
     queueNames: '队列',
     waiting: '等待',
     active: '运行',
@@ -159,13 +181,14 @@ const panelText = {
 	    retryQueued: '失败项已重新排队。',
 	    retryNothing: '当前没有失败或跳过的 frontier 项。',
 	    documentSearch: '文档检索',
-	    documentSearchHint: '在当前 run 的已抓取正文中检索关键词，快速定位来源、证据和上下文。',
-	    documentSearchPlaceholder: '搜索当前 run 的正文，例如 Pandoc / license / pricing',
+	    documentSearchHint: '在当前 run 的标题、正文、外链、抽取表格、证据片段和资产元数据中混合检索，快速定位来源、证据和上下文。',
+	    documentSearchPlaceholder: '搜索当前 run，例如 出生率 / 电商销售 / license / pricing',
 	    searchDocuments: '检索文档',
 	    noSearchResults: '暂无检索结果。',
 	    searchRank: '相关度',
 	    newsAnalysis: '新闻分析',
-	    newsAnalysisHint: '把当前 run 抓取到的文档送入 Data Lab 新闻整理 worker，生成同题聚类、事件时间线和来源质量判断。',
+	    newsAnalysisHint: '把当前 run 中“已抓取且有正文”的文档送入 Data Lab 新闻整理 worker，生成同题聚类、事件时间线和来源质量判断。若显示 0，说明当前 run 没有可分析正文，或还没进入抓取/抽取阶段。',
+	    newsAnalysisEmptyReason: '当前结果为空：请先确认“来源浏览”里有已抓取且有正文的文档；失败、空内容、复用但无正文的记录不会进入新闻分析。',
 	    newsCluster: '新闻聚类',
 	    newsTimeline: '事件时间线',
 	    newsSourceQuality: '来源质量',
@@ -234,16 +257,30 @@ const panelText = {
 	  en: {
     exportToDataLab: 'Export to Data Lab',
     openDataLab: 'Open Data Lab',
-    exportDataSourcesToDataLab: 'Import data source candidates',
-    dataSourceExportHint: 'Turn data-catalog, structured-api, competition-data, sports-data providers and frontier into a Data Lab source asset registry.',
+    exportDataSourcesToDataLab: 'Create Data Lab source registry',
+    dataSourceExportHint: 'This creates an analyzable source registry, not the final statistical table: each row is a dataset/API/competition/sports-data candidate with provider, source type, URL, priority, format hints, license hints, and importability.',
+    dataSourceDatasetExplanation: 'Next: Data Lab -> Source Assets -> filter by quality/importability -> import data snapshot -> Datasets/Analysis Wizard. Only materialized snapshots become tables for statistics and charts.',
     dataSourceExported: 'Data source candidates imported to Data Lab.',
     dataSourceRows: 'data sources',
     runtimeMonitor: 'Runtime monitor',
     runtimeMonitorHint: 'Watch the BullMQ discovery queue and global discovery provider health to confirm deep research is actually queued, crawling, and producing candidates.',
+    runTransparency: 'Run progress explanation',
+    runTransparencyFailed: 'This run failed: discovery, frontier, and partial fetch results are preserved, but evidence extraction and report generation did not complete, so there is no reliable conclusion yet.',
+    runTransparencyInProgress: 'This run is still running: providers first produce URL candidates, the frontier fetches by priority, then evidence and reports are generated.',
+    runTransparencyCompleted: 'This run completed: inspect original sources in Sources, evidence in Evidence, and the Chinese summary in Report.',
+    runStageHint: 'Current stage',
+    runNoClaimsHint: 'No claims have been generated yet. The run likely has not reached analysis, failed during fetch, or did not collect enough usable text.',
+    documentCountHint: 'Document count includes fetched, failed, and reused records; document search now searches titles, URLs, body text, links, extracted tables, evidence snippets, and asset metadata.',
+    lastError: 'Latest error',
+    noReportBecauseFailed: 'This run failed, so no report will be generated automatically. Inspect source failures or retry failed items from Overview.',
+    fetchedDocuments: 'Fetched',
+    failedDocuments: 'Failed docs',
+    reusedDocuments: 'Reused docs',
     queueHealth: 'Queue health',
     providerHealth: 'Provider health',
     dataSourceCoverage: 'Data source coverage',
     providerDetails: 'Provider details',
+    providerExplanation: 'A provider is a discovery source/search channel, not a final conclusion source. SerpApi/Tavily/NewsAPI find webpages; CKAN/Kaggle/WorldBank find datasets; official/sitemap/GitHub add official pages, sitemaps, and repositories. Provider count means call records, not pages fully read.',
     queueNames: 'Queues',
     waiting: 'Waiting',
     active: 'Active',
@@ -316,13 +353,14 @@ const panelText = {
 	    retryQueued: 'Failed items queued for retry.',
 	    retryNothing: 'No failed or skipped frontier items are available.',
 	    documentSearch: 'Document search',
-	    documentSearchHint: 'Search fetched text inside the current run to quickly locate sources, evidence, and context.',
-	    documentSearchPlaceholder: 'Search this run, e.g. Pandoc / license / pricing',
+	    documentSearchHint: 'Search titles, URLs, body text, links, extracted tables, evidence snippets, and asset metadata inside the current run.',
+	    documentSearchPlaceholder: 'Search this run, e.g. birth rate / ecommerce sales / license / pricing',
 	    searchDocuments: 'Search documents',
 	    noSearchResults: 'No search results.',
 	    searchRank: 'Rank',
 	    newsAnalysis: 'News analysis',
-	    newsAnalysisHint: 'Send documents from the current run into the Data Lab news worker for story clustering, event timelines, and source quality signals.',
+	    newsAnalysisHint: 'Send fetched documents with body text from the current run into the Data Lab news worker for story clustering, event timelines, and source quality signals. If it shows 0, the run has no analyzable fetched text yet.',
+	    newsAnalysisEmptyReason: 'Empty result: check Sources for fetched documents with body text. Failed, empty, or body-less records are not analyzed.',
 	    newsCluster: 'News clustering',
 	    newsTimeline: 'Event timeline',
 	    newsSourceQuality: 'Source quality',
@@ -399,6 +437,21 @@ const emptyGraphSummary: EvidenceGraphSummary = {
   conflictingRelations: 0,
 };
 
+type ResearchWorkspacePage = 'overview' | 'plan' | 'sources' | 'frontier' | 'evidence' | 'report' | 'diagnostics';
+
+function researchWorkspacePages(language: Language): Array<{ id: ResearchWorkspacePage; label: string; hint: string; icon: React.ReactNode }> {
+  const zh = language === 'zh';
+  return [
+    { id: 'overview', label: zh ? '总览' : 'Overview', hint: zh ? '看 run 状态、进度和下一步动作。' : 'Run status, progress, and next actions.', icon: <Gauge size={15} /> },
+    { id: 'plan', label: zh ? '查询计划' : 'Plan', hint: zh ? '查看系统准备怎么逐层研究。' : 'Inspect the planned research path.', icon: <ClipboardList size={15} /> },
+    { id: 'sources', label: zh ? '来源浏览' : 'Sources', hint: zh ? '检查抓取网页、正文、表格和失败原因。' : 'Review documents, extracts, tables, and failures.', icon: <FileSearch size={15} /> },
+    { id: 'frontier', label: zh ? 'Frontier' : 'Frontier', hint: zh ? '查看待抓 URL 和优先级评分。' : 'Inspect queued URLs and priority scoring.', icon: <ListFilter size={15} /> },
+    { id: 'evidence', label: zh ? '证据' : 'Evidence', hint: zh ? '把结论、证据和冲突关系对起来。' : 'Map claims, evidence, and conflicts.', icon: <Network size={15} /> },
+    { id: 'report', label: zh ? '报告' : 'Report', hint: zh ? '阅读最终中文研究报告和新闻分析。' : 'Read the final report and news analysis.', icon: <FileText size={15} /> },
+    { id: 'diagnostics', label: zh ? '诊断' : 'Diagnostics', hint: zh ? 'Provider、队列、Smoke 和能力验收。' : 'Providers, queues, smoke checks, and capability audit.', icon: <Activity size={15} /> },
+  ];
+}
+
 export const ResearchPanel: React.FC<ResearchPanelProps> = ({
   selectedJobId,
   onSelectedJobChange,
@@ -451,11 +504,25 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
   const [sampleAcceptance, setSampleAcceptance] = useState<ResearchSampleAcceptanceResultSummary | null>(null);
   const [enhancedFetchSmoke, setEnhancedFetchSmoke] = useState<EnhancedFetchSmokeResultSummary | null>(null);
   const [capabilitySmokeBusy, setCapabilitySmokeBusy] = useState<'' | 'provider' | 'data-source' | 'pressure' | 'sample-news' | 'sample-data' | 'enhanced-fetch'>('');
+  const [activePage, setActivePage] = useState<ResearchWorkspacePage>('overview');
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
   const sourceByDomain = useMemo(() => new Map(sources.map((source) => [source.domain, source])), [sources]);
   const providerStats = useMemo(() => summarizeProviders(providers), [providers]);
   const frontierStats = useMemo(() => summarizeFrontier(frontier), [frontier]);
+  const documentStats = useMemo(() => summarizeDocuments(documents), [documents]);
+  const latestErrorEvent = useMemo(
+    () => [...events].reverse().find((event) => event.level === 'error' || /fail|error|失败|错误/i.test(event.message)),
+    [events],
+  );
+  const runTransparencyMessage = useMemo(() => {
+    if (!selectedRun) return copy.runTransparencyInProgress;
+    if (selectedRun.status === 'failed' || selectedRun.status === 'cancelled') return copy.runTransparencyFailed;
+    if (selectedRun.status === 'completed') return copy.runTransparencyCompleted;
+    return copy.runTransparencyInProgress;
+  }, [copy, selectedRun]);
+  const workspacePages = useMemo(() => researchWorkspacePages(language), [language]);
+  const activePageMeta = workspacePages.find((page) => page.id === activePage) ?? workspacePages[0];
 
   const loadRuntimeMonitor = async () => {
     try {
@@ -1015,9 +1082,9 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
 
       <main className="flex-1 min-h-0 min-w-0 overflow-y-auto p-4 lg:p-5">
         {selectedJob ? (
-          <div className="grid xl:grid-cols-[minmax(0,1fr)_22rem] gap-5">
-            <section className="min-w-0 space-y-5">
-              <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+          <div className="mx-auto max-w-[1450px] space-y-5">
+            <section className="border-2 border-[#141414] bg-[#F5F5F4]">
+              <div className="flex flex-col gap-4 border-b-2 border-[#141414] p-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
                   <div className="font-mono text-xs uppercase tracking-widest opacity-50 mb-3">
                     {t('research.job')} {formatShortId(selectedJob.id)}
@@ -1028,6 +1095,7 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
                     <Badge>{labelForStatus(selectedRun?.status ?? selectedJob.status, language)}</Badge>
                     <Badge>{t('research.urls')}: {selectedRun?.budget.maxUrlsPerRun ?? selectedJob.budget.maxUrlsPerRun}</Badge>
                     <Badge>{t('research.domains')}: {selectedRun?.budget.maxDomainsPerRun ?? selectedJob.budget.maxDomainsPerRun}</Badge>
+                    <Badge>{activePageMeta.label}</Badge>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1038,130 +1106,241 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
                   <IconButton onClick={exportRunToDataset} disabled={!selectedRun || exportingDataset} title={copy.exportToDataLab} icon={<BarChart3 size={15} />} />
                 </div>
               </div>
-              {message && <p className="font-mono text-xs text-rose-700">{message}</p>}
-
-              <CapabilityAuditPanel
-                audit={capabilityAudit}
-                error={capabilityAuditError}
-                providerSmoke={providerSmoke}
-                dataSourceSmoke={dataSourceSmoke}
-                pressureSmoke={pressureSmoke}
-                sampleAcceptance={sampleAcceptance}
-                enhancedFetchSmoke={enhancedFetchSmoke}
-                busy={capabilitySmokeBusy}
-                onRunProviderSmoke={runProviderSmoke}
-                onRunDataSourceSmoke={runDataSourceSmoke}
-                onRunPressureSmoke={runPressureSmokeAction}
-                onRunSampleAcceptance={runSampleAcceptance}
-                onRunEnhancedFetchSmoke={runEnhancedFetchSmoke}
-                copy={copy}
-                language={language}
-              />
-
-              <RuntimeMonitorPanel
-                queueStatus={queueStatus}
-                providerHealth={providerHealth}
-                error={runtimeMonitorError}
-                copy={copy}
-              />
-
-              <RunTimeline run={selectedRun} events={events} language={language} t={t} />
-
-              <ManualRunControls
-                run={selectedRun}
-                query={manualQuery}
-                onQueryChange={setManualQuery}
-                onAppendQuery={appendManualQuery}
-                onRetryFailed={retryFailedFrontier}
-                busy={manualAction}
-                failedCount={(frontierStats.failed ?? 0) + (frontierStats.skipped ?? 0)}
-                copy={copy}
-                language={language}
-              />
-
-              <QueryPlanPanel
-                plan={plan}
-                plannedQueries={plannedQueries}
-                fallbackQueries={selectedJob.queryPlan}
-                copy={copy}
-                t={t}
-              />
-
-	              <div className="grid md:grid-cols-4 gap-3">
-	                <Metric label={t('research.docs')} value={documents.length} />
-	                <Metric label={t('research.frontier')} value={frontier.length} />
-	                <Metric label={t('research.claims')} value={claims.length} />
-	                <Metric label={t('research.providers')} value={providers.length} />
-	              </div>
-
-	              <RunDocumentSearchPanel
-	                run={selectedRun}
-	                query={documentSearchQuery}
-	                results={documentSearchResults}
-	                busy={documentSearchBusy}
-	                onQueryChange={setDocumentSearchQuery}
-	                onSearch={searchRunDocuments}
-	                onSelectDocument={setSelectedDocumentId}
-	                copy={copy}
-	                language={language}
-	              />
-
-	              <NewsAnalysisPanel
-	                run={selectedRun}
-	                result={newsAnalysis}
-	                busy={newsAnalysisAction}
-	                onRun={runNewsAnalysis}
-	                copy={copy}
-	                language={language}
-	              />
-
-	              <Panel title={t('research.latestReport')}>
-                {report?.markdown ? (
-                  <pre className="whitespace-pre-wrap text-sm leading-6 font-sans">{report.markdown}</pre>
-                ) : (
-                  <p className="font-mono text-sm opacity-60">{t('research.reportNotReady')}</p>
-                )}
-              </Panel>
-
-              <ClaimsPanel claims={claims} language={language} copy={copy} />
-              <EvidenceTable claims={claims} evidence={evidence} language={language} t={t} />
-              <EvidenceGraphPanel
-                claims={claims}
-                evidence={evidence}
-                relations={graphRelations}
-                summary={graphSummary}
-                copy={copy}
-                language={language}
-              />
+              <div className="flex gap-2 overflow-x-auto p-3">
+                {workspacePages.map((page) => (
+                  <button
+                    key={page.id}
+                    onClick={() => setActivePage(page.id)}
+                    className={`min-w-[9rem] shrink-0 border px-3 py-2 text-left transition ${activePage === page.id ? 'border-[#141414] bg-[#141414] text-white' : 'border-stone-300 bg-white hover:border-[#141414]'}`}
+                  >
+                    <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
+                      {page.icon}
+                      {page.label}
+                    </div>
+                    <div className={`mt-1 text-[11px] leading-4 ${activePage === page.id ? 'text-stone-200' : 'text-stone-500'}`}>{page.hint}</div>
+                  </button>
+                ))}
+              </div>
             </section>
 
-            <aside className="space-y-5 min-w-0">
-              <SourceExplorer
-                documents={documents}
-                selectedDocument={selectedDocument}
-                assets={assets}
-                links={documentLinks}
-                tables={tables}
-                claims={claims}
-                evidence={evidence}
-                sourceByDomain={sourceByDomain}
-                onSelect={setSelectedDocumentId}
-                language={language}
-                copy={copy}
-                t={t}
-              />
-              <FrontierPanel frontier={frontier} stats={frontierStats} language={language} t={t} copy={copy} />
-              <ProviderPanel
-                stats={providerStats}
-                providers={providers}
-                copy={copy}
-                t={t}
-                run={selectedRun}
-                exporting={exportingDataSources}
-                onExportDataSources={exportRunDataSourcesToDataset}
-                onOpenDataLab={selectedRun ? () => onOpenDataLab?.({ runId: selectedRun.id }) : undefined}
-              />
-            </aside>
+            {message && <p className="font-mono text-xs text-rose-700">{message}</p>}
+
+            {activePage === 'overview' && (
+              <section className="space-y-5">
+                <div className="grid md:grid-cols-4 gap-3">
+                  <Metric label={t('research.docs')} value={documents.length} />
+                  <Metric label={t('research.frontier')} value={frontier.length} />
+                  <Metric label={t('research.claims')} value={claims.length} />
+                  <Metric label={t('research.providers')} value={providers.length} />
+                </div>
+                <Panel title={copy.runTransparency}>
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+                    <div className="min-w-0">
+                      <p className="text-sm leading-6 text-stone-700">{runTransparencyMessage}</p>
+                      <div className="mt-3 flex flex-wrap gap-2 font-mono text-[10px] uppercase">
+                        <Badge>{copy.runStageHint}: {labelForStatus(selectedRun?.stage ?? selectedJob.status, language)}</Badge>
+                        <Badge>{t('research.frontier')}: {frontier.length}</Badge>
+                        <Badge>{t('research.providers')}: {providers.length}</Badge>
+                        <Badge>{copy.fetchedDocuments}: {documentStats.fetched}</Badge>
+                        <Badge>{copy.failedDocuments}: {documentStats.failed}</Badge>
+                        <Badge>{copy.reusedDocuments}: {documentStats.reused}</Badge>
+                      </div>
+                      {claims.length === 0 && (
+                        <p className="mt-3 border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                          {copy.runNoClaimsHint}
+                        </p>
+                      )}
+                      {latestErrorEvent && (
+                        <div className="mt-3 border border-rose-300 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800">
+                          <div className="mb-1 font-mono text-[10px] uppercase opacity-70">
+                            {copy.lastError} / {labelForStatus(latestErrorEvent.stage, language)} / {formatDate(latestErrorEvent.createdAt)}
+                          </div>
+                          <div>{latestErrorEvent.message}</div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="border border-stone-300 bg-white p-3 text-xs leading-5 text-stone-600">
+                      <p>{copy.documentCountHint}</p>
+                      <p className="mt-2">{copy.providerExplanation}</p>
+                    </div>
+                  </div>
+                </Panel>
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
+                  <RunTimeline run={selectedRun} events={events} language={language} t={t} />
+                  <Panel title={language === 'zh' ? '下一步' : 'Next steps'}>
+                    <div className="grid gap-2">
+                      {workspacePages.filter((page) => page.id !== 'overview').map((page) => (
+                        <button key={page.id} onClick={() => setActivePage(page.id)} className="border border-stone-300 bg-white p-3 text-left hover:border-[#141414]">
+                          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">{page.icon}{page.label}</div>
+                          <p className="mt-1 text-xs leading-5 text-stone-600">{page.hint}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </Panel>
+                </div>
+                <ManualRunControls
+                  run={selectedRun}
+                  query={manualQuery}
+                  onQueryChange={setManualQuery}
+                  onAppendQuery={appendManualQuery}
+                  onRetryFailed={retryFailedFrontier}
+                  busy={manualAction}
+                  failedCount={(frontierStats.failed ?? 0) + (frontierStats.skipped ?? 0)}
+                  copy={copy}
+                  language={language}
+                />
+              </section>
+            )}
+
+            {activePage === 'plan' && (
+              <section className="space-y-5">
+                <QueryPlanPanel
+                  plan={plan}
+                  plannedQueries={plannedQueries}
+                  fallbackQueries={selectedJob.queryPlan}
+                  copy={copy}
+                  t={t}
+                />
+                <ManualRunControls
+                  run={selectedRun}
+                  query={manualQuery}
+                  onQueryChange={setManualQuery}
+                  onAppendQuery={appendManualQuery}
+                  onRetryFailed={retryFailedFrontier}
+                  busy={manualAction}
+                  failedCount={(frontierStats.failed ?? 0) + (frontierStats.skipped ?? 0)}
+                  copy={copy}
+                  language={language}
+                />
+              </section>
+            )}
+
+            {activePage === 'sources' && (
+              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_26rem]">
+                <SourceExplorer
+                  documents={documents}
+                  selectedDocument={selectedDocument}
+                  assets={assets}
+                  links={documentLinks}
+                  tables={tables}
+                  claims={claims}
+                  evidence={evidence}
+                  sourceByDomain={sourceByDomain}
+                  onSelect={setSelectedDocumentId}
+                  language={language}
+                  copy={copy}
+                  t={t}
+                />
+                <RunDocumentSearchPanel
+                  run={selectedRun}
+                  query={documentSearchQuery}
+                  results={documentSearchResults}
+                  busy={documentSearchBusy}
+                  onQueryChange={setDocumentSearchQuery}
+                  onSearch={searchRunDocuments}
+                  onSelectDocument={setSelectedDocumentId}
+                  copy={copy}
+                  language={language}
+                />
+              </section>
+            )}
+
+            {activePage === 'frontier' && (
+              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
+                <FrontierPanel frontier={frontier} stats={frontierStats} language={language} t={t} copy={copy} />
+                <ProviderPanel
+                  stats={providerStats}
+                  providers={providers}
+                  copy={copy}
+                  t={t}
+                  run={selectedRun}
+                  exporting={exportingDataSources}
+                  onExportDataSources={exportRunDataSourcesToDataset}
+                  onOpenDataLab={selectedRun ? () => onOpenDataLab?.({ runId: selectedRun.id }) : undefined}
+                />
+              </section>
+            )}
+
+            {activePage === 'evidence' && (
+              <section className="space-y-5">
+                <EvidenceQualityPanel claims={claims} evidence={evidence} relations={graphRelations} language={language} />
+                <ClaimsPanel claims={claims} language={language} copy={copy} />
+                <EvidenceTable claims={claims} evidence={evidence} language={language} t={t} />
+                <EvidenceGraphPanel
+                  claims={claims}
+                  evidence={evidence}
+                  relations={graphRelations}
+                  summary={graphSummary}
+                  copy={copy}
+                  language={language}
+                />
+              </section>
+            )}
+
+            {activePage === 'report' && (
+              <section className="space-y-5">
+                <Panel title={t('research.latestReport')}>
+                  {report?.markdown ? (
+                    <pre className="whitespace-pre-wrap text-sm leading-6 font-sans">{report.markdown}</pre>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="font-mono text-sm opacity-60">{t('research.reportNotReady')}</p>
+                      {(selectedRun?.status === 'failed' || claims.length === 0) && (
+                        <p className="border border-amber-300 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">
+                          {selectedRun?.status === 'failed' ? copy.noReportBecauseFailed : copy.runNoClaimsHint}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </Panel>
+                <NewsAnalysisPanel
+                  run={selectedRun}
+                  result={newsAnalysis}
+                  busy={newsAnalysisAction}
+                  onRun={runNewsAnalysis}
+                  copy={copy}
+                  language={language}
+                />
+              </section>
+            )}
+
+            {activePage === 'diagnostics' && (
+              <section className="space-y-5">
+                <RuntimeMonitorPanel
+                  queueStatus={queueStatus}
+                  providerHealth={providerHealth}
+                  error={runtimeMonitorError}
+                  copy={copy}
+                />
+                <CapabilityAuditPanel
+                  audit={capabilityAudit}
+                  error={capabilityAuditError}
+                  providerSmoke={providerSmoke}
+                  dataSourceSmoke={dataSourceSmoke}
+                  pressureSmoke={pressureSmoke}
+                  sampleAcceptance={sampleAcceptance}
+                  enhancedFetchSmoke={enhancedFetchSmoke}
+                  busy={capabilitySmokeBusy}
+                  onRunProviderSmoke={runProviderSmoke}
+                  onRunDataSourceSmoke={runDataSourceSmoke}
+                  onRunPressureSmoke={runPressureSmokeAction}
+                  onRunSampleAcceptance={runSampleAcceptance}
+                  onRunEnhancedFetchSmoke={runEnhancedFetchSmoke}
+                  copy={copy}
+                  language={language}
+                />
+                <ProviderPanel
+                  stats={providerStats}
+                  providers={providers}
+                  copy={copy}
+                  t={t}
+                  run={selectedRun}
+                  exporting={exportingDataSources}
+                  onExportDataSources={exportRunDataSourcesToDataset}
+                  onOpenDataLab={selectedRun ? () => onOpenDataLab?.({ runId: selectedRun.id }) : undefined}
+                />
+              </section>
+            )}
           </div>
         ) : (
           <div className="h-full flex items-center justify-center opacity-30">

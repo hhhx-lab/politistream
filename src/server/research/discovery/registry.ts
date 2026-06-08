@@ -1,5 +1,6 @@
 import axios from "axios";
 import { ResearchConfig, getResearchConfig } from "../config";
+import { normalizeProviderTimestamp } from "../date";
 import { searchConfiguredProviders } from "../searchProviders";
 import { canonicalizeUrl, getDomain } from "../url";
 import {
@@ -46,6 +47,24 @@ export async function runDiscoveryProviders(
   input: DiscoveryProviderInput,
 ) {
   const startedAt = Date.now();
+  const results = await runProviderDiscoveryWithConcurrency(
+    providers,
+    input,
+    positiveInt(process.env.RESEARCH_DISCOVERY_PROVIDER_CONCURRENCY, 4),
+  );
+
+  return {
+    durationMs: Date.now() - startedAt,
+    results,
+    candidates: dedupeCandidates(results.flatMap((result) => result.candidates)),
+  };
+}
+
+export async function runProviderDiscoveryWithConcurrency(
+  providers: DiscoveryProvider[],
+  input: DiscoveryProviderInput,
+  concurrency: number,
+) {
   const results: Array<{
     provider: string;
     providerType: DiscoveryProviderType;
@@ -54,46 +73,53 @@ export async function runDiscoveryProviders(
     error?: string;
     durationMs: number;
   }> = [];
+  let index = 0;
 
-  for (const provider of providers) {
-    const providerStartedAt = Date.now();
-    if (!provider.enabled()) {
-      results.push({
-        provider: provider.name,
-        providerType: provider.type,
-        enabled: false,
-        candidates: [],
-        error: "provider_disabled",
-        durationMs: 0,
-      });
-      continue;
-    }
-
-    try {
-      results.push({
-        provider: provider.name,
-        providerType: provider.type,
-        enabled: true,
-        candidates: await provider.discover(input),
-        durationMs: Date.now() - providerStartedAt,
-      });
-    } catch (error) {
-      results.push({
-        provider: provider.name,
-        providerType: provider.type,
-        enabled: true,
-        candidates: [],
-        error: error instanceof Error ? error.message : String(error),
-        durationMs: Date.now() - providerStartedAt,
-      });
+  async function next() {
+    while (index < providers.length) {
+      const provider = providers[index++];
+      results.push(await runSingleProviderDiscovery(provider, input));
     }
   }
 
-  return {
-    durationMs: Date.now() - startedAt,
-    results,
-    candidates: dedupeCandidates(results.flatMap((result) => result.candidates)),
-  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, providers.length)) }, () => next()),
+  );
+
+  return results;
+}
+
+async function runSingleProviderDiscovery(provider: DiscoveryProvider, input: DiscoveryProviderInput) {
+  const providerStartedAt = Date.now();
+  if (!provider.enabled()) {
+    return {
+      provider: provider.name,
+      providerType: provider.type,
+      enabled: false,
+      candidates: [],
+      error: "provider_disabled",
+      durationMs: 0,
+    };
+  }
+
+  try {
+    return {
+      provider: provider.name,
+      providerType: provider.type,
+      enabled: true,
+      candidates: await provider.discover(input),
+      durationMs: Date.now() - providerStartedAt,
+    };
+  } catch (error) {
+    return {
+      provider: provider.name,
+      providerType: provider.type,
+      enabled: true,
+      candidates: [],
+      error: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - providerStartedAt,
+    };
+  }
 }
 
 export function normalizeDiscoveredCandidate(input: RawDiscoveredCandidate): DiscoveredCandidate {
@@ -111,7 +137,7 @@ export function normalizeDiscoveredCandidate(input: RawDiscoveredCandidate): Dis
     snippet: input.snippet ?? "",
     sourceType: input.sourceType ?? inferSourceType(input.url, input.providerType),
     rank: input.rank,
-    publishedAt: input.publishedAt,
+    publishedAt: normalizeProviderTimestamp(input.publishedAt),
     depth: input.depth ?? 0,
     discoveredAt: new Date().toISOString(),
     raw: input.raw,
@@ -505,9 +531,9 @@ export function createKaggleDiscoveryProvider(config: ResearchConfig = getResear
     sourceType: "dataset",
     urlFor: (query) => `https://www.kaggle.com/search?q=${encodeURIComponent(query.text)}`,
     titleFor: (query) => `Kaggle search: ${query.text}`,
-    snippet: config.kaggleUsername && config.kaggleKey
+    snippet: config.kaggleApiToken || (config.kaggleUsername && config.kaggleKey)
       ? "Kaggle 竞赛和数据集搜索入口；已配置 API 凭据，后续可接 CLI/API 下载授权数据。"
-      : "Kaggle 竞赛和数据集搜索入口；下载竞赛数据需要配置 KAGGLE_USERNAME/KAGGLE_KEY 并遵守比赛规则。",
+      : "Kaggle 竞赛和数据集搜索入口；下载竞赛数据需要配置新版 KAGGLE_API_TOKEN 并遵守比赛规则。",
     onlyWhen: (input) => wantsData(input.query.sourceTypes, input.query.text) || input.query.purpose === "competition-data",
   });
 }
@@ -778,4 +804,9 @@ function dedupeCandidates(candidates: DiscoveredCandidate[]) {
     deduped.push(candidate);
   }
   return deduped;
+}
+
+function positiveInt(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }

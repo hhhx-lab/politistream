@@ -240,12 +240,20 @@ async function checkResearchPanelResponsive({ width, height, name }) {
     await installDataLabOperationRouteMocks(page);
     await page.goto(appUrl, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: /研究任务/ }).first().click();
-    await page.getByText("能力验收台", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("Postgres", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("Deep / 500 URL", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("文档转换工具深度研究 smoke", { exact: false }).first().waitFor({ timeout: 10000 });
+    const main = page.locator("main");
+    const openResearchTab = async (tab) => {
+      await main.getByRole("button", { name: new RegExp(`^${escapeRegExp(tab)}`) }).first().click();
+    };
+    for (const tab of ["总览", "查询计划", "来源浏览", "Frontier", "证据", "报告", "诊断"]) {
+      await main.getByRole("button", { name: new RegExp(`^${escapeRegExp(tab)}`) }).first().waitFor({ timeout: 10000 });
+    }
     await page.getByText("Run 时间线", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("来源浏览器", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("工具对比", { exact: false }).first().waitFor({ timeout: 10000 });
+    for (const text of ["当前流水线", "阶段进度", "事件流", "按时间展示真实 run_events"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
+        throw new Error(`research ${name} timeline missing ${text}`);
+      });
+    }
     const metrics = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
@@ -253,9 +261,11 @@ async function checkResearchPanelResponsive({ width, height, name }) {
     if (metrics.scrollWidth > metrics.clientWidth + 2) {
       throw new Error(`research ${name} has horizontal overflow: ${metrics.scrollWidth} > ${metrics.clientWidth}`);
     }
-    for (const text of ["能力验收台", "最近验收证据", "样本验收", "运行新闻溯源样本", "运行数据处理样本", "Extractor 逐类型样本", "structured-data", "增强抓取 smoke", "运行增强抓取 smoke", "兼容 API 验收", "/api/datasets/:id/validate", "导出产物验收", "pptx", "Agent Console", "自然语言调度", "Env 配置清单", "全网搜索 Provider", "AI 摘要与报告", "BRAVE_API_KEY", "OPENAI_API_KEY", "至少一个", "provider_live_smoke:passed", "data_source_live_smoke:passed", "运行 Provider smoke", "运行数据源 smoke", "运行 Deep 压测", "Postgres", "Redis/BullMQ", "搜索 Provider", "数据 Provider", "sports", "抓取/抽取/AI", "Deep / 500 URL", "真实 provider 联网 smoke", "Standard/Deep 长任务压测", "运行监控", "队列健康", "Provider 健康", "research.fetch", "Run 时间线", "运行干预", "追加查询", "重试失败项", "查询计划", "文档检索", "检索文档", "新闻分析", "新闻聚类", "事件时间线", "来源质量", "结论索引", "证据表", "证据图谱", "来源浏览器", "来源筛选", "错误聚合", "fetch_failed: 403 blocked smoke", "查看引用来源", "证据质量门通过", "Frontier 视图", "评分解释", "主题相关", "来源权威", "原始来源", "新鲜度", "来源多样性", "上下文质量", "权重", "Provider 面板", "数据源覆盖", "data-catalog", "structured-api", "competition-data", "读取路径", "诊断结果", "fetcher:http", "发现外链", "格式文档", "已入队", "抽取表格", "工具对比", "Pandoc", "支持关系"]) {
+
+    await openResearchTab("诊断");
+    for (const text of ["运行监控", "队列健康", "Provider 健康", "research.fetch", "能力验收台", "最近验收证据", "Postgres", "Redis/BullMQ", "搜索 Provider", "数据 Provider", "sports", "能力目标 / Deep", "URL 预算", "Env 配置清单", "BRAVE_API_KEY", "AI_BASE_URL", "AI_API_KEY", "AI_MODEL", "Extractor 逐类型样本", "structured-data", "增强抓取 smoke", "兼容 API 验收", "/api/datasets/:id/validate", "导出产物验收", "pptx", "Agent Console", "自然语言调度", "provider_live_smoke:passed", "data_source_live_smoke:passed"]) {
       await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
-        throw new Error(`research ${name} missing ${text}`);
+        throw new Error(`research ${name} diagnostics missing ${text}`);
       });
     }
     await page.getByRole("button", { name: "运行 Provider smoke" }).click();
@@ -263,7 +273,8 @@ async function checkResearchPanelResponsive({ width, height, name }) {
     await page.getByRole("button", { name: "运行数据源 smoke" }).click();
     await page.getByText("https://catalog.data.gov/dataset/document-benchmark.csv", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByRole("button", { name: "运行 Deep 压测" }).click();
-    await page.getByText("Frontier 容量", { exact: false }).first().waitFor({ timeout: 5000 });
+    await page.getByText("能力目标 / Deep", { exact: false }).first().waitFor({ timeout: 5000 });
+    await page.getByText("URL 预算", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByText("500", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByRole("button", { name: "运行新闻溯源样本" }).click();
     await page.getByText("新闻样本文档进入整理链路", { exact: false }).first().waitFor({ timeout: 5000 });
@@ -271,33 +282,66 @@ async function checkResearchPanelResponsive({ width, height, name }) {
     await page.getByText("Schema 和质量画像可生成", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByRole("button", { name: "运行增强抓取 smoke" }).click();
     await page.getByText("browser-fallback", { exact: false }).first().waitFor({ timeout: 5000 });
+
+    await openResearchTab("查询计划");
+    for (const text of ["查询计划", "运行干预", "追加查询", "重试失败项"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
+        throw new Error(`research ${name} plan missing ${text}`);
+      });
+    }
+    await page.getByPlaceholder("追加新的研究方向、子问题或检索式").fill("Pandoc 与 LibreOffice 的转换质量对比");
+    await page.getByRole("button", { name: "追加查询" }).click();
+    await page.getByText("新的查询方向已追加", { exact: false }).first().waitFor({ timeout: 5000 });
+    await page.getByRole("button", { name: "重试失败项" }).click();
+    await page.getByText("失败项已重新排队", { exact: false }).first().waitFor({ timeout: 5000 });
+
+    await openResearchTab("来源浏览");
+    for (const text of ["来源浏览器", "来源筛选", "错误聚合", "fetch_failed: 403 blocked smoke", "查看引用来源", "读取路径", "诊断结果", "fetcher:http", "发现外链", "格式文档", "已入队", "抽取表格", "工具对比", "文档检索"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
+        throw new Error(`research ${name} sources missing ${text}`);
+      });
+    }
     await page.getByRole("combobox", { name: "Claim 反查" }).selectOption("smoke-conflict-claim");
     await page.getByText("Blocked benchmark mirror", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByRole("combobox", { name: "排序" }).selectOption("errors");
     await page.getByText("fetch_failed: 403 blocked smoke", { exact: false }).first().waitFor({ timeout: 5000 });
-    await page.getByRole("button", { name: /打开\s*Data Lab/ }).first().waitFor({ timeout: 5000 });
-    await page.getByPlaceholder(/搜索当前 run 的正文/).fill("Pandoc");
+    await page.getByPlaceholder(/搜索当前 run/).fill("Pandoc");
     await page.getByRole("button", { name: "检索文档" }).click();
     await page.getByText("检索命中：Pandoc 官方正文", { exact: false }).first().waitFor({ timeout: 5000 });
+
+    await openResearchTab("报告");
+    for (const text of ["新闻分析", "新闻聚类", "事件时间线", "来源质量", "研究摘要", "证据质量门通过"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
+        throw new Error(`research ${name} report missing ${text}`);
+      });
+    }
     await page.getByRole("button", { name: /新闻聚类/ }).click();
     await page.getByText("Pandoc 工具对比聚类", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByRole("button", { name: /事件时间线/ }).click();
     await page.getByText("Pandoc 官方资料纳入", { exact: false }).first().waitFor({ timeout: 5000 });
     await page.getByRole("button", { name: /来源质量/ }).click();
     await page.getByText("pandoc.org", { exact: false }).first().waitFor({ timeout: 5000 });
-    await page.getByPlaceholder("追加新的研究方向、子问题或检索式").fill("Pandoc 与 LibreOffice 的转换质量对比");
-    await page.getByRole("button", { name: "追加查询" }).click();
-    await page.getByText("新的查询方向已追加", { exact: false }).first().waitFor({ timeout: 5000 });
-    await page.getByRole("button", { name: "重试失败项" }).click();
-    await page.getByText("失败项已重新排队", { exact: false }).first().waitFor({ timeout: 5000 });
-    await page.getByRole("button", { name: /导入数据源候选/ }).click();
+
+    await openResearchTab("证据");
+    for (const text of ["证据质量总览", "可信度分布", "旧版模板", "结论索引", "证据表", "证据图谱", "证据摘要", "结论节点", "证据节点", "来源节点", "支持关系", "Pandoc"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
+        throw new Error(`research ${name} evidence missing ${text}`);
+      });
+    }
+
+    await openResearchTab("Frontier");
+    for (const text of ["Frontier 视图", "评分解释", "主题相关", "来源权威", "原始来源", "新鲜度", "来源多样性", "上下文质量", "权重", "Provider 面板", "数据源覆盖", "生成 Data Lab 数据源清单", "data-catalog", "structured-api", "competition-data"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
+        throw new Error(`research ${name} frontier missing ${text}`);
+      });
+    }
+    await page.getByRole("button", { name: /生成 Data Lab 数据源清单/ }).click();
     await page.getByText("数据源资产清单", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByText("已定位 Research 数据源上下文", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByText("Research smoke 数据源资产清单", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("关联 run", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("smoke-run", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByRole("button", { name: /回到 Research run/ }).click();
     await page.getByText("Run 时间线", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("来源浏览器", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.screenshot({
       path: path.join(outputDir, `research-${name}.png`),
       fullPage: true,
@@ -726,9 +770,10 @@ async function installResearchRouteMocks(page) {
         { name: "BRAVE_API_KEY", group: "search", requiredLevel: "at-least-one", configured: true, requiredFor100: true, impact: "主力通用网页发现。", howToGet: "在 Brave Search API 控制台创建订阅并复制 API key。" },
         { name: "SERPAPI_API_KEY", group: "search", requiredLevel: "at-least-one", configured: false, requiredFor100: true, impact: "Google 结果补充。", howToGet: "在 SerpApi 控制台创建 key。" },
         { name: "TAVILY_API_KEY", group: "search", requiredLevel: "at-least-one", configured: true, requiredFor100: true, impact: "研究型深度检索补充。", howToGet: "在 Tavily 控制台创建 API key。" },
-        { name: "OPENAI_API_KEY", group: "ai", requiredLevel: "at-least-one", configured: true, requiredFor100: true, impact: "文档相关性判断、claim/evidence 抽取和中文报告生成。", howToGet: "在 OpenAI Platform 创建项目 key。" },
-        { name: "GEMINI_API_KEY", group: "ai", requiredLevel: "at-least-one", configured: false, requiredFor100: true, impact: "可替代 OpenAI 的 AI 报告生成。", howToGet: "在 Google AI Studio 创建 Gemini API key。" },
-        { name: "KAGGLE_KEY", group: "data", requiredLevel: "recommended", configured: true, requiredFor100: false, impact: "比赛和公开数据集。", howToGet: "Kaggle Account 页面创建 API token。" },
+        { name: "AI_BASE_URL", group: "ai", requiredLevel: "required", configured: true, requiredFor100: true, impact: "GPT 中转站 OpenAI-compatible base URL。", howToGet: "在中转站控制台复制 base URL，通常以 /v1 结尾。" },
+        { name: "AI_API_KEY", group: "ai", requiredLevel: "required", configured: true, requiredFor100: true, impact: "GPT 中转站鉴权 key，用于文档相关性、claim/evidence 抽取和中文报告生成。", howToGet: "在中转站控制台创建或复制 API key。" },
+        { name: "AI_MODEL", group: "ai", requiredLevel: "required", configured: true, requiredFor100: true, impact: "GPT 中转站模型名。", howToGet: "在中转站模型列表中复制模型 id。" },
+        { name: "KAGGLE_API_TOKEN", group: "data", requiredLevel: "recommended", configured: true, requiredFor100: false, impact: "比赛和公开数据集。", howToGet: "Kaggle Account 的 API Tokens 页面生成新版 KGAT_ token。" },
         { name: "FIRECRAWL_API_KEY", group: "enhanced-fetch", requiredLevel: "optional", configured: false, requiredFor100: false, impact: "复杂页面增强抓取。", howToGet: "在 Firecrawl 控制台创建 API key。" },
       ],
       readinessScore: 67,
@@ -1470,51 +1515,11 @@ async function checkDataLab({ width, height, name }) {
     await page.getByRole("button", { name: "数据实验室", exact: true }).click();
     await page.waitForTimeout(800);
 
-    const requiredText = [
-      "研究型数据工厂",
-      "SPSS Pro 分析向导",
-      "推荐流程",
-      "方法链",
-      "图表方案",
-      "报告与导出",
-      "清洗、质量与转换",
-      "SPSS Pro 级统计",
-      "PyTorch / Embedding",
-      "新闻、文本和地理数据",
-      "MD / HTML / DOCX / PDF / PPTX",
-      "数据集操作台",
-      "数据源资产清单",
-      "数据源筛选",
-      "/api/analytics/datasets/from-research-run/:runId/data-sources",
-      "Data.gov document benchmark",
-      "open-data",
-      "download",
-      "来源质量",
-      "可导入性",
-      "ready",
-      "Lineage JSON",
-      "导入数据快照",
-      "批量导入前 8 个",
-      "默认拒绝 localhost",
-      "运行质量校验",
-      "执行清洗",
-      "字段查询",
-      "任务操作",
-      "重跑任务",
-      "取消任务",
-      "导出资产",
-      "API 接口面",
-      "/api/datasets",
-      "/api/analysis/jobs",
-      "/api/visualizations",
-      "/api/reports",
-      "/api/news-analysis/runs/:runId/cluster",
-      "/api/news-analysis/runs/:runId/timeline",
-      "/api/news-analysis/runs/:runId/source-quality",
-    ];
-    await page.getByText("SPSS Pro 分析向导", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("Data.gov document benchmark", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByText("默认拒绝 localhost", { exact: false }).first().waitFor({ timeout: 10000 });
+    const nav = page.locator("header nav");
+    for (const tab of ["首页", "导入数据", "数据集", "分析向导", "统计建模", "图表报告", "数据源资产", "任务产物", "系统接口"]) {
+      await nav.getByRole("button", { name: new RegExp(`^${escapeRegExp(tab)}`) }).first().waitFor({ timeout: 10000 });
+    }
+
     const metrics = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
@@ -1522,22 +1527,36 @@ async function checkDataLab({ width, height, name }) {
       text: document.body.innerText,
     }));
     const normalizedDataLabText = metrics.text.toLowerCase();
-    for (const text of requiredText) {
-      if (!normalizedDataLabText.includes(text.toLowerCase())) {
-        throw new Error(`${name} missing Data Lab text: ${text}`);
-      }
-    }
     if (metrics.scrollWidth > metrics.clientWidth + 2) {
       throw new Error(`${name} has horizontal overflow: ${metrics.scrollWidth} > ${metrics.clientWidth}`);
     }
-    if (!metrics.text.includes("Postgres 数据集")) {
-      throw new Error(`${name} missing Postgres datasets panel`);
+    if (!normalizedDataLabText.includes("研究型数据工厂")) {
+      throw new Error(`${name} missing Data Lab shell`);
     }
-    if (!metrics.text.includes("SPSS Pro 分析向导") || !metrics.text.includes("运行整套流程")) {
-      throw new Error(`${name} missing SPSS-style analysis wizard`);
-    }
+
+    await nav.getByRole("button", { name: /^分析向导/ }).first().click();
+    await page.getByText("SPSS Pro 分析向导", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("推荐流程", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("方法链", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("图表方案", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("报告与导出", { exact: false }).first().waitFor({ timeout: 10000 });
     for (const template of ["快速探索画像", "组间比较 / 问卷统计", "预测建模 / 回归", "聚类 / 降维 / 异常", "时间序列 / 趋势", "新闻文本整理", "论文制图 / 报告交付"]) {
       await page.getByRole("button", { name: new RegExp(template.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }).first().waitFor({ timeout: 5000 });
+    }
+
+    await nav.getByRole("button", { name: /^统计建模/ }).first().click();
+    for (const text of ["清洗、质量与转换", "SPSS Pro 级统计", "PyTorch / Embedding", "新闻、文本和地理数据", "MD / HTML / DOCX / PDF / PPTX"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 });
+    }
+
+    await nav.getByRole("button", { name: /^数据集/ }).first().click();
+    for (const text of ["数据集操作台", "运行质量校验", "执行清洗", "字段查询"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 });
+    }
+
+    await nav.getByRole("button", { name: /^数据源资产/ }).first().click();
+    for (const text of ["数据源资产清单", "数据源筛选", "Data.gov document benchmark", "open-data", "download", "来源质量", "可导入性", "ready", "Lineage JSON", "导入数据快照", "批量导入前 8 个", "默认拒绝 localhost"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 });
     }
     await page.getByRole("button", { name: /批量导入前 8 个/ }).first().click();
     await page.getByText("批量快照完成", { exact: false }).first().waitFor({ timeout: 10000 });
@@ -1549,6 +1568,16 @@ async function checkDataLab({ width, height, name }) {
     await page.getByRole("button", { name: /刷新数据源快照/ }).first().click();
     await page.getByText("数据源快照已刷新", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByText("materialized-smoke-dataset-v2", { exact: false }).first().waitFor({ timeout: 10000 });
+
+    await nav.getByRole("button", { name: /^任务产物/ }).first().click();
+    for (const text of ["任务操作", "重跑任务", "取消任务", "导出资产"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 });
+    }
+
+    await nav.getByRole("button", { name: /^系统接口/ }).first().click();
+    for (const text of ["API 接口面", "/api/datasets", "/api/analysis/jobs", "/api/visualizations", "/api/reports", "/api/news-analysis/runs/:runId/cluster", "/api/news-analysis/runs/:runId/timeline", "/api/news-analysis/runs/:runId/source-quality"]) {
+      await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 });
+    }
 
     await page.screenshot({
       path: path.join(outputDir, `data-lab-${name}.png`),
@@ -1566,8 +1595,11 @@ async function checkDataLabChartPreview() {
     await installDataLabOperationRouteMocks(page);
     await page.goto(appUrl, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "数据实验室", exact: true }).click();
+    const nav = page.locator("header nav");
+    await nav.getByRole("button", { name: /^导入数据/ }).first().click();
     await page.getByRole("button", { name: /保存\s*手动\s*数据/ }).click();
     await page.getByText("Reuters", { exact: false }).first().waitFor({ timeout: 10000 });
+    await nav.getByRole("button", { name: /^数据集/ }).first().click();
     await page.getByRole("button", { name: /运行质量校验/ }).click();
     await page.getByText("qualityScore", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByRole("button", { name: /执行清洗/ }).click();
@@ -1575,6 +1607,7 @@ async function checkDataLabChartPreview() {
     await page.getByLabel("查询字段").fill("source,count");
     await page.getByRole("button", { name: /字段查询/ }).click();
     await page.getByText("字段查询结果：Reuters", { exact: false }).first().waitFor({ timeout: 10000 });
+    await nav.getByRole("button", { name: /^任务产物/ }).first().click();
     await page.getByRole("button", { name: /重跑任务/ }).first().click();
     await page.getByText("任务已重跑", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByRole("button", { name: /取消任务/ }).first().click();
@@ -1584,6 +1617,7 @@ async function checkDataLabChartPreview() {
     await page.getByText("visualization-export-smoke", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByRole("button", { name: /^pdf$/i }).first().click();
     await page.getByText("report-export-smoke", { exact: false }).first().waitFor({ timeout: 10000 });
+    await nav.getByRole("button", { name: /^图表报告/ }).first().click();
     await page.locator('button:not([disabled])').filter({ hasText: /来源.*count|source.*count/i }).first().click();
     await page.getByText("图表预览", { exact: false }).first().waitFor({ timeout: 10000 });
     const metrics = await page.evaluate(() => ({
@@ -1596,11 +1630,6 @@ async function checkDataLabChartPreview() {
     }
     if (!metrics.text.includes("图表预览")) {
       throw new Error("Data Lab chart preview did not render");
-    }
-    for (const text of ["数据集操作台", "运行质量校验", "执行清洗", "字段查询", "字段查询结果：Reuters", "任务已重跑", "任务已取消", "导出资产", "visualization-export-smoke", "report-export-smoke"]) {
-      if (!metrics.text.includes(text)) {
-        throw new Error(`Data Lab operations missing ${text}`);
-      }
     }
     await page.screenshot({
       path: path.join(outputDir, "data-lab-chart-preview.png"),

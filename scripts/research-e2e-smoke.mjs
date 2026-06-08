@@ -21,8 +21,7 @@ const backendEnv = {
   RESEARCH_RESPECT_ROBOTS_TXT: "false",
   RESEARCH_MEMORY_ENABLED: "false",
   RESEARCH_DISCOVERY_OFFLINE_ONLY: "true",
-  OPENAI_API_KEY: "",
-  GEMINI_API_KEY: "",
+  AI_API_KEY: "",
   REDIS_URL: redisUrl,
 };
 

@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getResearchConfig, ResearchConfig } from "./config";
+import { normalizeProviderTimestamp } from "./date";
 import { canonicalizeUrl } from "./url";
 import { ProviderName, SearchCandidate, QueryPurpose, SourceType } from "./types";
 
@@ -194,7 +195,7 @@ function normalizeResultList(
       canonicalUrl,
       title: String(row?.[fields.title] ?? ""),
       snippet: String(row?.[fields.snippet] ?? ""),
-      publishedAt: row?.date ?? row?.published_date ?? undefined,
+      publishedAt: normalizeProviderTimestamp(row?.date ?? row?.published_date),
       depth: input.depth ?? 0,
     });
   }

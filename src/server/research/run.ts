@@ -36,6 +36,7 @@ import {
   listPlannedQueriesForRun,
   listSearchCandidatesForRun,
   recordSourceMemory,
+  updateEvidenceItemClaimId,
   updateFrontierItemStatus,
   updateResearchJobQueryPlan,
   updateResearchJobStatus,
@@ -61,6 +62,7 @@ import {
   ResearchReport,
   ResearchRun,
   SearchCandidate,
+  SourceType,
 } from "./types";
 
 export interface QueuedResearchRunResult {
@@ -89,13 +91,16 @@ export async function createQueuedResearchRun(jobId: string): Promise<QueuedRese
   if (!job) throw new Error("research_job_not_found");
 
   const run = await createResearchRun(job);
+  const plan = planResearch(job.topic, job.seedUrls, job.constraints);
+  await addResearchPlan({ jobId: job.id, runId: run.id, plan });
+  await updateResearchJobQueryPlan(job.id, plan.queries.map((query) => query.text));
   await addRunEvent({
     jobId: job.id,
     runId: run.id,
     stage: "queued",
     level: "info",
     message: "研究 run 已创建并等待 worker 执行。",
-    data: { budget: run.budget },
+    data: { budget: run.budget, queryCount: plan.queries.length },
   });
   await enqueueResearchRun(run.id, job.id);
   await updateResearchJobStatus(job.id, "running");
@@ -157,9 +162,25 @@ export async function runDiscoveryForRun(runId: string) {
 
   await moveRun(run, "discovery", "开始调用 discovery providers。");
   const discoveryProviders = createDefaultDiscoveryProviders(getResearchConfig());
+  const discoveryQueries = dedupePlannedQueriesForDiscovery(plan.value.queries)
+    .slice(0, positiveInt(process.env.RESEARCH_DISCOVERY_QUERY_LIMIT, 16));
   const discovered: DiscoveredCandidate[] = [];
 
-  for (const query of plan.value.queries) {
+  await addRunEvent({
+    jobId: job.id,
+    runId,
+    stage: "discovery",
+    level: "info",
+    message: "Discovery 进度：准备调用 providers。",
+    data: {
+      originalQueryCount: plan.value.queries.length,
+      dedupedQueryCount: dedupePlannedQueriesForDiscovery(plan.value.queries).length,
+      activeQueryCount: discoveryQueries.length,
+      providerCount: discoveryProviders.length,
+    },
+  });
+
+  for (const [queryIndex, query] of discoveryQueries.entries()) {
     if (await shouldStop(runId)) return { candidateCount: 0 };
     const discovery = await runDiscoveryProviders(discoveryProviders, {
       jobId: job.id,
@@ -184,6 +205,21 @@ export async function runDiscoveryForRun(runId: string) {
     }
 
     discovered.push(...discovery.candidates);
+
+    await addRunEvent({
+      jobId: job.id,
+      runId,
+      stage: "discovery",
+      level: "info",
+      message: "Discovery 进度：查询已完成。",
+      data: {
+        queryIndex: queryIndex + 1,
+        queryCount: discoveryQueries.length,
+        query: query.text,
+        candidateCount: discovery.candidates.length,
+        durationMs: discovery.durationMs,
+      },
+    });
   }
 
   const storedCandidates: SearchCandidate[] = [];
@@ -220,6 +256,24 @@ function mergePlannedQueries(baseQueries: PlannedQuery[], currentQueries: Planne
   for (const query of baseQueries) byId.set(query.id, query);
   for (const query of currentQueries) byId.set(query.id, query);
   return [...byId.values()].sort((left, right) => right.priority - left.priority);
+}
+
+function dedupePlannedQueriesForDiscovery(queries: PlannedQuery[]) {
+  const byText = new Map<string, PlannedQuery>();
+  for (const query of queries) {
+    const key = query.text.replace(/\s+/g, " ").trim().toLowerCase();
+    if (!key) continue;
+    const existing = byText.get(key);
+    if (!existing || query.priority > existing.priority) {
+      byText.set(key, query);
+    }
+  }
+  return [...byText.values()].sort((left, right) => right.priority - left.priority);
+}
+
+function positiveInt(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 export async function buildFrontierForRun(runId: string) {
@@ -613,12 +667,27 @@ async function analyzeDocument(
   await moveRun({ id: runId, jobId: job.id } as ResearchRun, "analyzing", "正在抽取证据。");
   const analysis = await analyzeResearchDocument(job.topic, document);
   const profile = createSourceProfile(document.finalUrl || document.url, frontier.sourceType);
-  const credibilityScore = credibilityScoreFor(profile);
-  const analyzedEvidence = evidenceFromAnalysis(job.id, document, analysis);
-  const evidenceItems = analyzedEvidence.length > 0
-    ? analyzedEvidence
-    : fallbackEvidenceFromDocument(job, runId, document, credibilityScore);
+  const credibilityScore = sourceConfidenceAdjustment(credibilityScoreFor(profile), profile.sourceType, analysis.relevanceScore, analysis.topicTermHits ?? 0, analysis.topicTermCount ?? 0);
+  const evidenceItems = evidenceFromAnalysis(job.id, document, analysis);
   const storedEvidence: EvidenceItem[] = [];
+
+  if (evidenceItems.length === 0) {
+    await addRunEvent({
+      jobId: job.id,
+      runId,
+      stage: "analyzing",
+      level: "info",
+      message: "文档没有抽取到可追溯证据，已跳过生成结论。",
+      data: {
+        documentId: document.id,
+        url: document.finalUrl || document.url,
+        relevanceScore: analysis.relevanceScore,
+        topicTermHits: analysis.topicTermHits ?? 0,
+        topicTermCount: analysis.topicTermCount ?? 0,
+      },
+    });
+    return storedEvidence;
+  }
 
   for (const item of evidenceItems) {
     const saved = await addEvidenceItem({
@@ -640,6 +709,7 @@ async function analyzeDocument(
     }));
     if (saved.id && claim.id) {
       saved.claimId = claim.id;
+      await updateEvidenceItemClaimId(saved.id, claim.id);
       await addEvidenceRelation(buildEvidenceRelation({
         claimId: claim.id,
         evidenceId: saved.id,
@@ -651,6 +721,31 @@ async function analyzeDocument(
   }
 
   return storedEvidence;
+}
+
+function sourceConfidenceAdjustment(
+  baseScore: number,
+  sourceType: SourceType,
+  relevanceScore: number,
+  topicTermHits: number,
+  topicTermCount: number,
+) {
+  const sourceBonus: Record<string, number> = {
+    official: 0.16,
+    regulatory: 0.14,
+    "mainstream-news": 0.1,
+    academic: 0.1,
+    dataset: 0.08,
+    "structured-api": 0.08,
+    "data-catalog": 0.06,
+    company: 0.03,
+    community: -0.04,
+    rss: -0.06,
+    unknown: -0.08,
+  };
+  const coverage = topicTermCount > 0 ? Math.min(1, topicTermHits / topicTermCount) : 0;
+  const adjusted = baseScore * 0.62 + relevanceScore * 0.24 + coverage * 0.14 + (sourceBonus[sourceType] ?? 0);
+  return Math.max(0.05, Math.min(0.98, Number(adjusted.toFixed(3))));
 }
 
 async function enqueueDiscoveredLinks(
@@ -732,31 +827,6 @@ function frontierToSearchCandidate(item: FrontierItem): SearchCandidate {
     depth: item.depth,
     discoveredFromUrl: item.discoveredFromUrl,
   };
-}
-
-function fallbackEvidenceFromDocument(
-  job: ResearchJob,
-  runId: string,
-  document: CrawlDocument,
-  credibilityScore: number,
-): EvidenceItem[] {
-  if (!document.id || !document.contentText) return [];
-  const snippet = document.contentText.slice(0, 600).trim();
-  if (!snippet) return [];
-  return [{
-    jobId: job.id,
-    runId,
-    documentId: document.id,
-    sourceUrl: document.finalUrl || document.url,
-    snippet,
-    quote: snippet,
-    explanation: `已抓取与 ${job.topic} 相关的来源内容`,
-    relevanceScore: 0.3,
-    credibilityScore,
-    supportsClaim: true,
-    contradictsClaim: false,
-    entities: [],
-  }];
 }
 
 async function persistRunReport(

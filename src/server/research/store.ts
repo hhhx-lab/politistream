@@ -1,10 +1,11 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { randomUUID } from "crypto";
 import { getResearchConfig, requireResearchDatabase } from "./config";
+import { normalizeProviderTimestamp } from "./date";
 import { normalizeResearchBudget } from "./budget";
 import { normalizeResearchConstraints } from "./queryPlanner";
 import { topicFingerprint } from "./memory/researchMemory";
-import { normalizeDocumentSearchQuery } from "./search/documentIndex";
+import { tokenizeDocumentSearchQuery } from "./search/documentIndex";
 import {
   CrawlDocument,
   DocumentAsset,
@@ -29,6 +30,7 @@ import {
 } from "./types";
 
 let pool: Pool | null = null;
+let schemaInitPromise: Promise<void> | null = null;
 
 function getPool() {
   if (!pool) {
@@ -45,10 +47,25 @@ export async function closeResearchStore() {
     await pool.end();
     pool = null;
   }
+  schemaInitPromise = null;
 }
 
 export async function initResearchSchema() {
-  await getPool().query(`
+  if (!schemaInitPromise) {
+    schemaInitPromise = initResearchSchemaOnce().catch((error) => {
+      schemaInitPromise = null;
+      throw error;
+    });
+  }
+  return schemaInitPromise;
+}
+
+async function initResearchSchemaOnce() {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(297651142, 193874482)");
+    await client.query(`
     CREATE TABLE IF NOT EXISTS research_jobs (
       id TEXT PRIMARY KEY,
       topic TEXT NOT NULL,
@@ -350,26 +367,33 @@ export async function initResearchSchema() {
 	    FROM ranked_tables
 	    WHERE extracted_tables.id = ranked_tables.id;
 	  `);
-  await ensureDocumentLinksUniqueIndex();
-  await ensureExtractedTablesUniqueIndex();
+    await ensureDocumentLinksUniqueIndex(client);
+    await ensureExtractedTablesUniqueIndex(client);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-async function ensureDocumentLinksUniqueIndex() {
-  await getPool().query(`
+async function ensureDocumentLinksUniqueIndex(client: PoolClient) {
+  await client.query(`
     DELETE FROM document_links a
     USING document_links b
     WHERE a.document_id = b.document_id
       AND a.url = b.url
       AND a.created_at > b.created_at
   `);
-  await getPool().query(`
+  await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_document_links_document_url
     ON document_links(document_id, url)
   `);
 }
 
-async function ensureExtractedTablesUniqueIndex() {
-  const existingConstraint = await getPool().query(
+async function ensureExtractedTablesUniqueIndex(client: PoolClient) {
+  const existingConstraint = await client.query(
     `
       SELECT 1
       FROM pg_constraint
@@ -379,7 +403,7 @@ async function ensureExtractedTablesUniqueIndex() {
   );
   if (existingConstraint.rows[0]) return;
 
-  await getPool().query(`
+  await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_extracted_tables_document_index
     ON extracted_tables(document_id, table_index)
   `);
@@ -395,12 +419,12 @@ export async function createResearchJob(input: {
 }): Promise<ResearchJob> {
   const job: ResearchJob = {
     id: randomUUID(),
-    topic: input.topic,
-    seedUrls: input.seedUrls ?? [],
+    topic: sanitizePostgresText(input.topic) ?? input.topic,
+    seedUrls: sanitizeJsonValue(input.seedUrls ?? []),
     status: "active",
     budget: normalizeResearchBudget(input.budget),
     constraints: normalizeResearchConstraints(input.constraints ?? {}),
-    queryPlan: input.queryPlan ?? [],
+    queryPlan: sanitizeJsonValue(input.queryPlan ?? []),
     nextRunAt: input.nextRunAt,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -415,11 +439,11 @@ export async function createResearchJob(input: {
     [
       job.id,
       job.topic,
-      JSON.stringify(job.seedUrls),
+      sanitizeJsonForPostgres(job.seedUrls),
       job.status,
-      JSON.stringify(job.budget),
-      JSON.stringify(job.constraints),
-      JSON.stringify(job.queryPlan),
+      sanitizeJsonForPostgres(job.budget),
+      sanitizeJsonForPostgres(job.constraints),
+      sanitizeJsonForPostgres(job.queryPlan),
       job.nextRunAt ?? null,
     ],
   );
@@ -448,7 +472,7 @@ export async function updateResearchJobStatus(id: string, status: ResearchJob["s
 export async function updateResearchJobQueryPlan(id: string, queryPlan: string[]): Promise<ResearchJob | null> {
   const result = await getPool().query(
     "UPDATE research_jobs SET query_plan = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
-    [id, JSON.stringify(queryPlan)],
+    [id, sanitizeJsonForPostgres(queryPlan)],
   );
   return result.rows[0] ? mapResearchJob(result.rows[0]) : null;
 }
@@ -464,7 +488,7 @@ export async function addResearchPlan(input: {
       INSERT INTO research_plans (id, job_id, run_id, plan)
       VALUES ($1,$2,$3,$4)
     `,
-    [id, input.jobId, input.runId, JSON.stringify(input.plan)],
+    [id, input.jobId, input.runId, sanitizeJsonForPostgres(input.plan)],
   );
   await replacePlannedQueries({
     jobId: input.jobId,
@@ -504,9 +528,9 @@ export async function replacePlannedQueries(input: {
         scopedId,
         input.jobId,
         input.runId,
-        query.text,
+        sanitizePostgresText(query.text) ?? query.text,
         query.purpose,
-        JSON.stringify(query.sourceTypes),
+        sanitizeJsonForPostgres(query.sourceTypes),
         query.language,
         query.priority,
       ],
@@ -523,7 +547,7 @@ export async function appendPlannedQueryForRun(input: {
   language?: string;
   priority?: number;
 }): Promise<PlannedQuery> {
-  const normalizedText = input.text.trim().replace(/\s+/g, " ");
+  const normalizedText = (sanitizePostgresText(input.text) ?? input.text).trim().replace(/\s+/g, " ");
   const query: PlannedQuery = {
     id: `manual-${randomUUID()}`,
     text: normalizedText,
@@ -547,7 +571,7 @@ export async function appendPlannedQueryForRun(input: {
       input.runId,
       query.text,
       query.purpose,
-      JSON.stringify(query.sourceTypes),
+      sanitizeJsonForPostgres(query.sourceTypes),
       query.language,
       query.priority,
     ],
@@ -584,7 +608,7 @@ export async function createResearchRun(job: ResearchJob): Promise<ResearchRun> 
       VALUES ($1,$2,$3,$4,$5)
       RETURNING *
     `,
-    [id, job.id, "queued", "queued", JSON.stringify(job.budget)],
+    [id, job.id, "queued", "queued", sanitizeJsonForPostgres(job.budget)],
   );
   await recordResearchTopicMemory(job.topic, job.id, id);
   return mapResearchRun(result.rows[0]);
@@ -647,7 +671,15 @@ export async function addRunEvent(event: RunEvent): Promise<RunEvent> {
       VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING *
     `,
-    [id, event.jobId, event.runId, event.stage, event.level, event.message, JSON.stringify(event.data ?? {})],
+    [
+      id,
+      event.jobId,
+      event.runId,
+      event.stage,
+      event.level,
+      sanitizePostgresText(event.message) ?? event.message,
+      sanitizeJsonForPostgres(event.data ?? {}),
+    ],
   );
   return mapRunEvent(result.rows[0]);
 }
@@ -699,20 +731,20 @@ export async function upsertFrontierItem(item: FrontierItem): Promise<FrontierIt
       id,
       item.jobId,
       item.runId,
-      item.url,
-      item.canonicalUrl,
+      sanitizePostgresText(item.url) ?? item.url,
+      sanitizePostgresText(item.canonicalUrl) ?? item.canonicalUrl,
       item.depth,
       item.sourceType,
       item.priorityScore,
-      item.scoreBreakdown ?? {},
+      sanitizeJsonValue(item.scoreBreakdown ?? {}),
       item.status,
       item.attempts,
-      item.discoveredFromUrl ?? null,
+      sanitizePostgresText(item.discoveredFromUrl ?? null),
       item.discoveredFromDocumentId ?? null,
-      item.queryId ?? null,
-      item.reason,
+      sanitizePostgresText(item.queryId ?? null),
+      sanitizePostgresText(item.reason) ?? item.reason,
       item.nextAttemptAt ?? null,
-      item.lastError ?? null,
+      sanitizePostgresText(item.lastError ?? null),
     ],
   );
   return mapFrontierItem(result.rows[0]);
@@ -734,7 +766,7 @@ export async function updateFrontierItemStatus(
       WHERE id = $1
       RETURNING *
     `,
-    [id, status, input.attempts ?? null, input.lastError ?? null, input.reason ?? null],
+    [id, status, input.attempts ?? null, sanitizePostgresText(input.lastError ?? null), sanitizePostgresText(input.reason ?? null)],
   );
   return result.rows[0] ? mapFrontierItem(result.rows[0]) : null;
 }
@@ -749,7 +781,7 @@ export async function resetFailedFrontierItemsForRun(runId: string): Promise<Fro
           reason = 'manual_retry',
           updated_at = NOW()
       WHERE run_id = $1
-        AND status IN ('failed', 'skipped')
+        AND status IN ('failed', 'skipped', 'fetching')
       RETURNING *
     `,
     [runId],
@@ -792,7 +824,7 @@ export async function addDiscoveryResult(input: {
       input.providerType,
       input.queryId ?? null,
       input.candidateCount,
-      input.error ?? null,
+      sanitizePostgresText(input.error ?? null),
       input.durationMs ?? 0,
       input.costUnits ?? 0,
     ],
@@ -801,6 +833,12 @@ export async function addDiscoveryResult(input: {
 
 export async function upsertSearchCandidate(candidate: SearchCandidate): Promise<SearchCandidate> {
   const id = candidate.id ?? randomUUID();
+  const provider = sanitizePostgresText(candidate.provider) ?? candidate.provider;
+  const query = sanitizePostgresText(candidate.query) ?? candidate.query;
+  const url = sanitizePostgresText(candidate.url) ?? candidate.url;
+  const canonicalUrl = sanitizePostgresText(candidate.canonicalUrl) ?? candidate.canonicalUrl;
+  const title = sanitizePostgresText(candidate.title) ?? candidate.title;
+  const snippet = sanitizePostgresText(candidate.snippet) ?? candidate.snippet;
   const result = await getPool().query(
     `
       INSERT INTO search_candidates (
@@ -817,15 +855,15 @@ export async function upsertSearchCandidate(candidate: SearchCandidate): Promise
       id,
       candidate.jobId,
       candidate.runId ?? null,
-      candidate.provider,
-      candidate.query,
-      candidate.url,
-      candidate.canonicalUrl,
-      candidate.title,
-      candidate.snippet,
-      candidate.publishedAt ?? null,
+      provider,
+      query,
+      url,
+      canonicalUrl,
+      title,
+      snippet,
+      normalizeProviderTimestamp(candidate.publishedAt) ?? null,
       candidate.depth,
-      candidate.discoveredFromUrl ?? null,
+      sanitizePostgresText(candidate.discoveredFromUrl ?? null),
     ],
   );
 
@@ -842,6 +880,16 @@ export async function listSearchCandidatesForRun(runId: string): Promise<SearchC
 
 export async function upsertCrawlDocument(document: CrawlDocument): Promise<CrawlDocument> {
   const id = document.id ?? randomUUID();
+  const url = sanitizePostgresText(document.url) ?? document.url;
+  const canonicalUrl = sanitizePostgresText(document.canonicalUrl) ?? document.canonicalUrl;
+  const finalUrl = sanitizePostgresText(document.finalUrl ?? null);
+  const title = sanitizePostgresText(document.title ?? null);
+  const contentText = sanitizePostgresText(document.contentText ?? null);
+  const contentHash = sanitizePostgresText(document.contentHash ?? null);
+  const domain = sanitizePostgresText(document.domain) ?? document.domain;
+  const status = sanitizePostgresText(document.status) ?? document.status;
+  const error = sanitizePostgresText(document.error ?? null);
+  const memoryStatus = sanitizePostgresText(document.memoryStatus ?? "fresh") ?? "fresh";
   const result = await getPool().query(
     `
       INSERT INTO crawl_documents (
@@ -867,19 +915,19 @@ export async function upsertCrawlDocument(document: CrawlDocument): Promise<Craw
       id,
       document.jobId,
       document.runId ?? null,
-      document.url,
-      document.canonicalUrl,
-      document.finalUrl ?? null,
-      document.title ?? null,
-      document.domain,
-      document.contentText ?? null,
-      document.contentHash ?? null,
+      url,
+      canonicalUrl,
+      finalUrl,
+      title,
+      domain,
+      contentText,
+      contentHash,
       document.depth,
-      document.status,
-      document.error ?? null,
+      status,
+      error,
       document.fetchedAt ?? null,
-      document.memoryStatus ?? "fresh",
-      JSON.stringify(document.metadata ?? {}),
+      memoryStatus,
+      sanitizeJsonForPostgres(document.metadata ?? {}),
     ],
   );
 
@@ -956,9 +1004,9 @@ export async function upsertDocumentAsset(asset: DocumentAsset): Promise<Documen
       asset.jobId,
       asset.runId ?? null,
       asset.documentId,
-      asset.url,
+      sanitizePostgresText(asset.url) ?? asset.url,
       asset.assetType,
-      JSON.stringify(asset.metadata),
+      sanitizeJsonForPostgres(asset.metadata),
     ],
   );
   return mapDocumentAsset(result.rows[0]);
@@ -990,9 +1038,9 @@ export async function upsertDocumentLink(link: DocumentLinkRecord): Promise<Docu
       link.jobId,
       link.runId ?? null,
       link.documentId,
-      link.url,
-      link.text,
-      link.context ?? null,
+      sanitizePostgresText(link.url) ?? link.url,
+      sanitizePostgresText(link.text) ?? "",
+      sanitizePostgresText(link.context ?? null),
       link.enqueued ? 1 : 0,
     ],
   );
@@ -1030,9 +1078,9 @@ export async function upsertExtractedTable(table: ExtractedTableRecord): Promise
       table.runId ?? null,
       table.documentId,
       table.tableIndex,
-      table.caption ?? null,
-      JSON.stringify(table.headers),
-      JSON.stringify(table.rows),
+      sanitizePostgresText(table.caption ?? null),
+      sanitizeJsonForPostgres(table.headers),
+      sanitizeJsonForPostgres(table.rows),
     ],
   );
   return mapExtractedTable(result.rows[0]);
@@ -1050,47 +1098,118 @@ export async function searchCrawlDocumentsForRun(
   runId: string,
   query: string,
 ): Promise<DocumentSearchResult[]> {
-  const normalizedQuery = normalizeDocumentSearchQuery(query);
-  if (!normalizedQuery) return [];
+  const tokens = tokenizeDocumentSearchQuery(query);
+  if (tokens.length === 0) return [];
 
-  try {
-    const result = await getPool().query(
-      `
-        WITH q AS (SELECT to_tsquery('simple', $2) AS query)
+  const result = await getPool().query(
+    `
+      WITH token_rows AS (
+        SELECT unnest($2::text[]) AS token
+      ),
+      document_search AS (
         SELECT
           crawl_documents.id,
           crawl_documents.title,
           crawl_documents.url,
-          ts_rank_cd(crawl_documents.search_vector, q.query) AS rank,
-          ts_headline(
-            'simple',
-            COALESCE(crawl_documents.content_text, ''),
-            q.query,
-            'MaxWords=30,MinWords=8,ShortWord=2'
-          ) AS snippet
-        FROM crawl_documents, q
-        WHERE crawl_documents.run_id = $1
-          AND crawl_documents.search_vector @@ q.query
-        ORDER BY rank DESC, crawl_documents.created_at DESC
-        LIMIT 25
-      `,
-      [runId, normalizedQuery],
-    );
-    return result.rows.map(mapDocumentSearchResult);
-  } catch {
-    const result = await getPool().query(
-      `
-        SELECT id, title, url, 0.1 AS rank, LEFT(COALESCE(content_text, ''), 240) AS snippet
+          crawl_documents.final_url,
+          crawl_documents.domain,
+          crawl_documents.status,
+          crawl_documents.error,
+          crawl_documents.content_text,
+          crawl_documents.metadata,
+          crawl_documents.created_at,
+          COALESCE(link_agg.link_text, '') AS link_text,
+          COALESCE(table_agg.table_text, '') AS table_text,
+          COALESCE(evidence_agg.evidence_text, '') AS evidence_text,
+          COALESCE(asset_agg.asset_text, '') AS asset_text,
+          CONCAT_WS(
+            ' ',
+            crawl_documents.title,
+            crawl_documents.url,
+            crawl_documents.final_url,
+            crawl_documents.domain,
+            crawl_documents.status,
+            crawl_documents.error,
+            crawl_documents.content_text,
+            crawl_documents.metadata::text,
+            COALESCE(link_agg.link_text, ''),
+            COALESCE(table_agg.table_text, ''),
+            COALESCE(evidence_agg.evidence_text, ''),
+            COALESCE(asset_agg.asset_text, '')
+          ) AS search_blob
         FROM crawl_documents
-        WHERE run_id = $1
-          AND (title ILIKE $2 OR content_text ILIKE $2)
-        ORDER BY created_at DESC
-        LIMIT 25
-      `,
-      [runId, `%${query.trim()}%`],
-    );
-    return result.rows.map(mapDocumentSearchResult);
-  }
+        LEFT JOIN LATERAL (
+          SELECT string_agg(CONCAT_WS(' ', document_links.url, document_links.text, document_links.context), ' ') AS link_text
+          FROM document_links
+          WHERE document_links.document_id = crawl_documents.id
+        ) link_agg ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT string_agg(CONCAT_WS(' ', extracted_tables.caption, extracted_tables.headers::text, extracted_tables.rows::text), ' ') AS table_text
+          FROM extracted_tables
+          WHERE extracted_tables.document_id = crawl_documents.id
+        ) table_agg ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT string_agg(CONCAT_WS(' ', evidence_items.quote, evidence_items.paraphrase, evidence_items.snippet, evidence_items.explanation, evidence_items.entities::text), ' ') AS evidence_text
+          FROM evidence_items
+          WHERE evidence_items.document_id = crawl_documents.id
+        ) evidence_agg ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT string_agg(CONCAT_WS(' ', document_assets.url, document_assets.asset_type, document_assets.metadata::text), ' ') AS asset_text
+          FROM document_assets
+          WHERE document_assets.document_id = crawl_documents.id
+        ) asset_agg ON TRUE
+        WHERE crawl_documents.run_id = $1
+      ),
+      scored AS (
+        SELECT
+          document_search.*,
+          (
+            SELECT COUNT(*)
+            FROM token_rows
+            WHERE document_search.search_blob ILIKE '%' || token_rows.token || '%'
+          ) AS match_count,
+          (
+            SELECT SUM(
+              CASE
+                WHEN COALESCE(document_search.title, '') ILIKE '%' || token_rows.token || '%' THEN 4
+                WHEN COALESCE(document_search.url, '') ILIKE '%' || token_rows.token || '%' THEN 3
+                WHEN COALESCE(document_search.link_text, '') ILIKE '%' || token_rows.token || '%' THEN 2.5
+                WHEN COALESCE(document_search.table_text, '') ILIKE '%' || token_rows.token || '%' THEN 2.5
+                WHEN COALESCE(document_search.evidence_text, '') ILIKE '%' || token_rows.token || '%' THEN 3
+                WHEN COALESCE(document_search.asset_text, '') ILIKE '%' || token_rows.token || '%' THEN 1.5
+                WHEN COALESCE(document_search.content_text, '') ILIKE '%' || token_rows.token || '%' THEN 2
+                WHEN COALESCE(document_search.error, '') ILIKE '%' || token_rows.token || '%' THEN 1
+                ELSE 0
+              END
+            )
+            FROM token_rows
+          ) AS weighted_score
+        FROM document_search
+      )
+      SELECT
+        id,
+        title,
+        url,
+        (
+          COALESCE(weighted_score, 0)
+          + match_count::real / GREATEST($3::real, 1)
+          + CASE WHEN status = 'fetched' THEN 0.5 ELSE 0 END
+        ) AS rank,
+        COALESCE(NULLIF(content_text, ''), NULLIF(table_text, ''), NULLIF(evidence_text, ''), NULLIF(link_text, ''), NULLIF(asset_text, ''), error, url, '') AS snippet,
+        match_count,
+        status,
+        domain
+      FROM scored
+      WHERE match_count > 0
+      ORDER BY rank DESC, match_count DESC, created_at DESC
+      LIMIT 40
+    `,
+    [runId, tokens, tokens.length],
+  );
+  return result.rows.map((row) => ({
+    ...mapDocumentSearchResult(row),
+    snippet: buildDocumentSearchSnippet(row.snippet ?? "", tokens),
+  }));
 }
 
 export async function addEvidenceItem(item: EvidenceItem): Promise<EvidenceItem> {
@@ -1109,21 +1228,34 @@ export async function addEvidenceItem(item: EvidenceItem): Promise<EvidenceItem>
       item.jobId,
       item.runId ?? null,
       item.documentId,
-      item.claimId ?? null,
-      item.sourceUrl,
-      item.quote ?? null,
-      item.paraphrase ?? null,
-      item.snippet,
-      item.explanation,
+      sanitizePostgresText(item.claimId ?? null),
+      sanitizePostgresText(item.sourceUrl) ?? item.sourceUrl,
+      sanitizePostgresText(item.quote ?? null),
+      sanitizePostgresText(item.paraphrase ?? null),
+      sanitizePostgresText(item.snippet) ?? item.snippet,
+      sanitizePostgresText(item.explanation) ?? item.explanation,
       item.relevanceScore,
       item.credibilityScore ?? null,
       item.supportsClaim ?? null,
       item.contradictsClaim ?? null,
-      JSON.stringify(item.entities),
+      sanitizeJsonForPostgres(item.entities),
     ],
   );
 
   return mapEvidenceItem(result.rows[0]);
+}
+
+export async function updateEvidenceItemClaimId(id: string, claimId: string): Promise<EvidenceItem | null> {
+  const result = await getPool().query(
+    `
+      UPDATE evidence_items
+      SET claim_id = $2
+      WHERE id = $1
+      RETURNING *
+    `,
+    [id, claimId],
+  );
+  return result.rows[0] ? mapEvidenceItem(result.rows[0]) : null;
 }
 
 export async function listEvidenceItemsForRun(runId: string): Promise<EvidenceItem[]> {
@@ -1149,14 +1281,14 @@ export async function addEvidenceClaim(claim: EvidenceClaim): Promise<EvidenceCl
       id,
       claim.jobId,
       claim.runId,
-      claim.claim,
-      claim.normalizedClaim,
+      sanitizePostgresText(claim.claim) ?? claim.claim,
+      sanitizePostgresText(claim.normalizedClaim) ?? claim.normalizedClaim,
       claim.status,
       claim.confidence,
-      JSON.stringify(claim.supportingEvidenceIds),
-      JSON.stringify(claim.conflictingEvidenceIds),
+      sanitizeJsonForPostgres(claim.supportingEvidenceIds),
+      sanitizeJsonForPostgres(claim.conflictingEvidenceIds),
       claim.firstSeenAt ?? null,
-      claim.primarySourceUrl ?? null,
+      sanitizePostgresText(claim.primarySourceUrl ?? null),
     ],
   );
   return mapEvidenceClaim(result.rows[0]);
@@ -1218,12 +1350,12 @@ export async function upsertSourceProfile(profile: SourceProfile): Promise<Sourc
     `,
     [
       id,
-      profile.domain,
+      sanitizePostgresText(profile.domain) ?? profile.domain,
       profile.sourceType,
       profile.authorityTier,
       profile.officialLikelihood,
       profile.mainstreamLikelihood,
-      JSON.stringify(profile.notes),
+      sanitizeJsonForPostgres(profile.notes),
     ],
   );
   return mapSourceProfile(result.rows[0]);
@@ -1244,7 +1376,14 @@ export async function addResearchReport(report: ResearchReport): Promise<Researc
       VALUES ($1,$2,$3,$4,$5,$6)
       RETURNING *
     `,
-    [id, report.jobId, report.runId ?? null, report.status, report.markdown, report.generatedAt ?? null],
+    [
+      id,
+      report.jobId,
+      report.runId ?? null,
+      report.status,
+      sanitizePostgresText(report.markdown) ?? report.markdown,
+      report.generatedAt ?? null,
+    ],
   );
 
   return mapResearchReport(result.rows[0]);
@@ -1280,6 +1419,50 @@ export async function listCrawlDocumentsForRun(runId: string): Promise<CrawlDocu
     [runId],
   );
   return result.rows.map(mapCrawlDocument);
+}
+
+function sanitizePostgresText(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  return String(value)
+    .replace(/\u0000/g, "")
+    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+}
+
+function sanitizeJsonValue<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizePostgresText(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonValue(item)) as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [sanitizePostgresText(key) ?? key, sanitizeJsonValue(item)]),
+    ) as T;
+  }
+  return value;
+}
+
+function sanitizeJsonForPostgres(value: unknown): string {
+  return JSON.stringify(sanitizeJsonValue(value));
+}
+
+function buildDocumentSearchSnippet(value: string, tokens: string[]) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  const token = tokens
+    .slice()
+    .sort((left, right) => right.length - left.length)
+    .find((item) => lower.includes(item.toLowerCase()));
+  if (!token) return text.slice(0, 280);
+
+  const index = lower.indexOf(token.toLowerCase());
+  const start = Math.max(0, index - 90);
+  const end = Math.min(text.length, index + token.length + 190);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < text.length ? "..." : "";
+  return `${prefix}${text.slice(start, end)}${suffix}`;
 }
 
 function mapResearchJob(row: any): ResearchJob {
@@ -1461,6 +1644,9 @@ function mapDocumentSearchResult(row: any): DocumentSearchResult {
     url: row.url,
     rank: Number(row.rank ?? 0),
     snippet: row.snippet ?? "",
+    matchCount: row.match_count === undefined ? undefined : Number(row.match_count ?? 0),
+    status: row.status ?? undefined,
+    domain: row.domain ?? undefined,
   };
 }
 

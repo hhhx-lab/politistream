@@ -259,6 +259,9 @@ export interface DocumentSearchResult {
   url: string;
   rank: number;
   snippet: string;
+  matchCount?: number;
+  status?: string;
+  domain?: string;
 }
 
 export interface EvidenceItem {

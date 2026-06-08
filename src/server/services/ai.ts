@@ -1,4 +1,3 @@
-import { Type } from "@google/genai";
 import { generateStructuredJson } from "./llm";
 
 export interface AnalysisResult {
@@ -21,19 +20,6 @@ const ANALYSIS_SCHEMA_OPENAI = {
   additionalProperties: false,
 };
 
-const ANALYSIS_SCHEMA_GEMINI = {
-  type: Type.OBJECT,
-  properties: {
-    summary: { type: Type.STRING },
-    sentiment: { type: Type.NUMBER },
-    entities: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-  },
-  required: ["summary", "sentiment", "entities"],
-};
-
 export async function analyzeContent(title: string, snippet: string, url?: string): Promise<AnalysisResult> {
   const prompt = buildAnalysisPrompt(title, snippet, url);
 
@@ -44,14 +30,13 @@ export async function analyzeContent(title: string, snippet: string, url?: strin
       schemaName: "news_analysis",
       schemas: {
         openai: ANALYSIS_SCHEMA_OPENAI,
-        gemini: ANALYSIS_SCHEMA_GEMINI,
       },
       url,
     });
 
     if (!result) {
       return {
-        summary: "AI 分析已禁用，因为当前没有可用的 AI provider 配置。请检查 AI_PROVIDER、OPENAI_API_KEY 或 GEMINI_API_KEY。",
+        summary: "AI 分析已禁用，因为当前没有可用的 GPT 中转站配置。请在 .env 中填写 AI_BASE_URL、AI_API_KEY 和 AI_MODEL。",
         sentiment: 0,
         entities: [],
       };

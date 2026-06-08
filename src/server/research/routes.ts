@@ -350,7 +350,7 @@ export function createResearchRouter() {
         runId: run.id,
         stage: "fetching",
         level: resetItems.length > 0 ? "info" : "warn",
-        message: resetItems.length > 0 ? "失败或跳过的 frontier 项已重置并等待重试。" : "没有可重试的失败或跳过 frontier 项。",
+        message: resetItems.length > 0 ? "失败、跳过或卡在抓取中的 frontier 项已重置并等待重试。" : "没有可重试的失败、跳过或卡住 frontier 项。",
         data: { resetCount: resetItems.length },
       });
       if (resetItems.length > 0) {

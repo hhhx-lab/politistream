@@ -14,7 +14,7 @@ export function createAgentRouter() {
     res.json({
       agent: {
         role: "任务分配 Agent",
-        modelRouting: "AI_MODEL 可配置，默认 gpt-5.4；优先走 OpenAI，缺失时可回退 Gemini；当前轻量分派器本身不依赖模型调用。",
+        modelRouting: "AI_BASE_URL、AI_API_KEY、AI_MODEL 指向 GPT 中转站；当前轻量分派器本身不依赖模型调用。",
       },
       analytics: getAnalyticsCapabilities(),
       research: [

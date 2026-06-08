@@ -175,7 +175,16 @@ export const SourceExplorer: React.FC<{
       </div>
       <div className="space-y-2 max-h-56 overflow-y-auto mb-4">
         {visibleDocuments.length === 0 ? (
-          <p className="font-mono text-xs opacity-60">{t('research.noDocuments')}</p>
+          <div className="border border-dashed border-stone-300 bg-white/70 p-3">
+            <p className="font-mono text-xs opacity-60">
+              {documents.length === 0
+                ? t('research.noDocuments')
+                : language === 'zh'
+                  ? '当前筛选没有命中文档，清空关键词、状态、等级或 Claim 反查后再看。'
+                  : 'No documents match the current filters. Clear keyword, status, tier, or claim filters.'}
+            </p>
+            {documents.length > 0 && <p className="mt-2 text-xs leading-5 text-stone-600">{copy.documentCountHint}</p>}
+          </div>
         ) : visibleDocuments.map((document) => (
           <button
             key={document.id}

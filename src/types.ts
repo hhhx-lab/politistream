@@ -166,6 +166,9 @@ export interface DocumentSearchResultSummary {
   url: string;
   rank: number;
   snippet: string;
+  matchCount?: number;
+  status?: string;
+  domain?: string;
 }
 
 export interface ExtractedTableSummary {
@@ -640,10 +643,10 @@ export interface ResearchConfigStatus {
   dataProviders?: Record<string, boolean>;
   ai?: {
     provider: string;
+    baseUrl: string;
     model: string;
     configured: boolean;
-    openaiConfigured: boolean;
-    geminiConfigured: boolean;
+    keyConfigured: boolean;
   };
   enabledSearchProviderCount: number;
   enabledDataProviderCount?: number;

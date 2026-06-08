@@ -42,6 +42,16 @@ function testProviderNormalization() {
   assert.equal(normalizeSerpApiResults({ organic_results: [{ link: "https://b.com", title: "B", snippet: "B desc" }] }, input)[0].provider, "serpapi");
   assert.equal(normalizeNewsApiResults({ articles: [{ url: "https://news.example.com/article", title: "News", description: "News desc" }] }, input)[0].provider, "newsapi");
   assert.equal(normalizeTavilyResults({ results: [{ url: "https://c.com", title: "C", content: "C desc" }] }, input)[0].provider, "tavily");
+  assert.equal(
+    normalizeSerpApiResults({ organic_results: [{ link: "https://relative-date.example.com", title: "Relative", snippet: "Relative date", date: "6 days ago" }] }, input)[0].publishedAt,
+    undefined,
+    "relative provider dates must not be passed to Postgres timestamptz",
+  );
+  assert.equal(
+    normalizeSerpApiResults({ organic_results: [{ link: "https://iso-date.example.com", title: "ISO", snippet: "ISO date", date: "2026-06-01T12:00:00Z" }] }, input)[0].publishedAt,
+    "2026-06-01T12:00:00.000Z",
+    "valid provider dates should be normalized to ISO timestamps",
+  );
 }
 
 function testDiscoveryCandidateNormalization() {
@@ -65,39 +75,52 @@ function testDiscoveryCandidateNormalization() {
 }
 
 function testAiProviderRouting() {
-  const openaiConfig = {
+  const gptRelayConfig = {
     databaseUrl: "postgres://localhost/politistream",
     redisUrl: "redis://localhost:6379",
-    aiProvider: "openai",
-    openaiApiKey: "sk-openai-test-123",
-    geminiApiKey: "",
+    aiBaseUrl: "https://relay.example.com/v1",
+    aiApiKey: "sk-relay-test-123",
     aiModel: "gpt-5.4",
     newsApiKey: "news-api-test-123",
     browserProvider: "local" as const,
   };
-  const geminiFallbackConfig = {
+  const missingKeyConfig = {
     databaseUrl: "postgres://localhost/politistream",
     redisUrl: "redis://localhost:6379",
-    aiProvider: "openai",
-    openaiApiKey: "",
-    geminiApiKey: "gemini-key-test-123",
+    aiBaseUrl: "https://relay.example.com/v1",
+    aiApiKey: "",
     aiModel: "gpt-5.4",
     newsApiKey: "",
     browserProvider: "local" as const,
   };
 
-  assert.equal(resolveAiProvider(openaiConfig), "openai");
-  assert.equal(resolveAiModel(openaiConfig), "gpt-5.4");
-  assert.equal(resolveAiProvider(geminiFallbackConfig), "gemini");
-  assert.equal(resolveAiModel(geminiFallbackConfig), "gemini-2.0-flash");
+  assert.equal(resolveAiProvider(gptRelayConfig), "gpt-compatible");
+  assert.equal(resolveAiModel(gptRelayConfig), "gpt-5.4");
+  assert.equal(resolveAiProvider(missingKeyConfig), null);
+  assert.equal(resolveAiModel(missingKeyConfig), "gpt-5.4");
 
-  const status = getResearchConfigStatus(openaiConfig);
-  assert.equal(status.ai.provider, "openai");
+  const status = getResearchConfigStatus(gptRelayConfig);
+  assert.equal(status.ai.provider, "gpt-compatible");
+  assert.equal(status.ai.baseUrl, "https://relay.example.com/v1");
   assert.equal(status.ai.model, "gpt-5.4");
   assert.equal(status.ai.configured, true);
-  assert.equal(status.ai.openaiConfigured, true);
-  assert.equal(status.ai.geminiConfigured, false);
+  assert.equal(status.ai.keyConfigured, true);
   assert.equal(status.searchProviders.newsApi, true);
+}
+
+function testKaggleApiTokenEnablesDataProvider() {
+  const status = getResearchConfigStatus({
+    aiModel: "gpt-5.4",
+    browserProvider: "local" as const,
+    kaggleApiToken: "KGAT_test_token_123456789",
+  });
+  const audit = getResearchCapabilityAudit({
+    KAGGLE_API_TOKEN: "KGAT_test_token_123456789",
+  });
+
+  assert.equal(status.dataProviders.kaggle, true, "KAGGLE_API_TOKEN alone should enable Kaggle provider readiness");
+  assert.ok(audit.dataProviders.some((provider) => provider.name === "kaggle" && provider.configured), "audit should mark Kaggle configured from KAGGLE_API_TOKEN");
+  assert.ok(audit.envChecklist.some((item) => item.name === "KAGGLE_API_TOKEN" && item.configured && item.group === "data"), "audit should expose new Kaggle API token env");
 }
 
 function testFrontierPriorityScoring() {
@@ -245,6 +268,20 @@ function testPlannerClassifiesGenericDataResearch() {
   assert.ok(queryPurposes.has("visualization"));
 }
 
+function testResearchPlanningAgentExpandsTopicSpecificSubQuestions() {
+  const plan = planResearch("研究一下中国避孕套市场，比如主要的消费人群，地区，购买时间段，以及他们与出生率的关系等等");
+  const questions = plan.subQuestions.join("\n");
+  const queryTexts = plan.queries.map((query) => query.text).join("\n");
+
+  assert.ok(plan.subQuestions.length >= 12, "research planning agent should generate broad topic-specific sub-questions");
+  for (const keyword of ["消费人群", "地区", "购买时间段", "出生率", "数据口径", "电商", "年龄", "趋势"]) {
+    assert.ok(questions.includes(keyword), `sub-questions should cover ${keyword}`);
+  }
+  for (const keyword of ["中国 避孕套 市场 消费人群", "避孕套 出生率 相关性", "避孕套 电商 销售 时间段"]) {
+    assert.ok(queryTexts.includes(keyword), `planned queries should expand topic dimension: ${keyword}`);
+  }
+}
+
 function testPlannerClassifiesVerification() {
   const plan = planResearch("查证某条关于 AI 芯片出口管制的新闻是否真实，并找到原始出处");
   const queryPurposes = new Set(plan.queries.map((query) => query.purpose));
@@ -261,7 +298,7 @@ function testPlannerClassifiesVerification() {
 }
 
 function testPlannerAddsSeedDomainQueries() {
-  const plan = planResearch("OpenAI responses api", ["https://platform.openai.com/docs/overview"]);
+  const plan = planResearch("GPT compatible chat completions api", ["https://platform.openai.com/docs/overview"]);
   const seedQuery = plan.queries.find((query) => query.text.includes("site:platform.openai.com"));
 
   assert.ok(seedQuery);
@@ -387,6 +424,56 @@ function testResearchSchemaCreatesReferencedTablesBeforeRelations() {
   );
 }
 
+function testResearchStoreProtectsSchemaInitAndSanitizesCrawlerText() {
+  const source = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+
+  assert.ok(source.includes("schemaInitPromise"), "schema initialization should be reused inside one Node process");
+  assert.ok(source.includes("pg_advisory_xact_lock"), "schema initialization should use a Postgres advisory lock across workers");
+  assert.ok(source.includes("sanitizePostgresText"), "crawler text should be sanitized before writing to Postgres");
+  assert.ok(source.includes(".replace(/\\u0000/g, \"\")"), "Postgres text sanitizer must strip null bytes from fetched pages");
+  assert.ok(source.includes("sanitizeJsonForPostgres(document.metadata ?? {})"), "crawl metadata JSON should be sanitized before JSONB writes");
+}
+
+function testDocumentSearchUsesHybridFieldsBeyondContentText() {
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const searchSource = readFileSync(new URL("./search/documentIndex.ts", import.meta.url), "utf8");
+
+  assert.ok(searchSource.includes("tokenizeDocumentSearchQuery"), "document search should tokenize Chinese and mixed-language queries");
+  assert.ok(storeSource.includes("document_links"), "document search should join discovered links");
+  assert.ok(storeSource.includes("extracted_tables"), "document search should include extracted table content");
+  assert.ok(storeSource.includes("document_assets"), "document search should include raw asset metadata");
+  assert.ok(storeSource.includes("evidence_items"), "document search should include evidence snippets and paraphrases");
+  assert.ok(storeSource.includes("search_blob"), "document search should build a weighted multi-field search blob");
+  assert.ok(storeSource.includes("match_count"), "document search should score by token match coverage, not only PostgreSQL full text");
+}
+
+function testResearchUiExplainsRunTransparencyAndProviderMeaning() {
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const sourceExplorerSource = readFileSync(new URL("../../components/research/SourceExplorerPanel.tsx", import.meta.url), "utf8");
+  const workflowPanelsSource = readFileSync(new URL("../../components/research/RunWorkflowPanels.tsx", import.meta.url), "utf8");
+  const frontierProviderSource = readFileSync(new URL("../../components/research/FrontierProviderPanels.tsx", import.meta.url), "utf8");
+
+  assert.ok(panelSource.includes("本次研究进度解释"), "overview should explain the current research run state");
+  assert.ok(panelSource.includes("runTransparencyFailed"), "overview should explicitly explain failed runs");
+  assert.ok(panelSource.includes("runNoClaimsHint"), "UI should explain why no claims/conclusions are visible yet");
+  assert.ok(panelSource.includes("noReportBecauseFailed"), "report page should explain why a failed run has no report");
+  assert.ok(panelSource.includes("fetchedDocuments"), "overview should split fetched document counts from total documents");
+  assert.ok(sourceExplorerSource.includes("copy.documentCountHint"), "Source Explorer should explain document count vs text search mismatch");
+  assert.ok(workflowPanelsSource.includes("copy.documentCountHint"), "document search panel should explain why search can show zero results");
+  assert.ok(frontierProviderSource.includes("copy.providerExplanation"), "Provider Panel should define provider as a discovery channel");
+}
+
+function testDiscoveryIsBoundedAndObservable() {
+  const runSource = readFileSync(new URL("./run.ts", import.meta.url), "utf8");
+  const registrySource = readFileSync(new URL("./discovery/registry.ts", import.meta.url), "utf8");
+
+  assert.ok(runSource.includes("dedupePlannedQueriesForDiscovery"), "discovery should remove duplicate planned query text before provider fan-out");
+  assert.ok(runSource.includes("RESEARCH_DISCOVERY_QUERY_LIMIT"), "discovery should cap per-run query fan-out by env-configurable limit");
+  assert.ok(runSource.includes("Discovery 进度"), "discovery should emit query-level progress events instead of appearing stuck");
+  assert.ok(registrySource.includes("runProviderDiscoveryWithConcurrency"), "provider registry should execute provider discovery with bounded concurrency");
+  assert.ok(registrySource.includes("RESEARCH_DISCOVERY_PROVIDER_CONCURRENCY"), "provider concurrency should be env-configurable");
+}
+
 function testStructuredResearchPlanPersistenceIsWired() {
   const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
   const runSource = readFileSync(new URL("./run.ts", import.meta.url), "utf8");
@@ -400,6 +487,8 @@ function testStructuredResearchPlanPersistenceIsWired() {
   assert.ok(storeSource.includes("return `${runId}-${queryId}`"), "planner query ids should not collide globally across runs");
   assert.ok(runSource.includes("createDefaultDiscoveryProviders(getResearchConfig())"), "run discovery should use the provider registry");
   assert.ok(runSource.includes("await addResearchPlan({ jobId: job.id, runId, plan })"), "run discovery should write structured plan artifacts");
+  assert.ok(runSource.includes("const plan = planResearch(job.topic, job.seedUrls, job.constraints);"), "queued runs should pre-generate the topic-specific plan before workers start");
+  assert.ok(runSource.includes("queryCount: plan.queries.length"), "queued run events should expose how many planned queries were generated");
   assert.ok(routesSource.includes('router.get("/runs/:runId/plan"'), "API should expose run plan and planned queries");
   assert.ok(panelSource.includes("QueryPlanPanel"), "Research UI should mount the structured query plan panel");
   assert.ok(workflowPanelsSource.includes("export const QueryPlanPanel"), "Research UI should surface the structured query plan");
@@ -418,7 +507,7 @@ function testResearchE2eUsesOfflineDiscoveryMode() {
     "offline discovery should keep a seed-url-only provider set",
   );
   assert.ok(smokeSource.includes("RESEARCH_DISCOVERY_OFFLINE_ONLY"), "research e2e smoke should run without external provider dependency");
-  assert.ok(smokeSource.includes("OPENAI_API_KEY: \"\""), "research e2e smoke should not depend on external AI providers");
+  assert.ok(smokeSource.includes("AI_API_KEY: \"\""), "research e2e smoke should not depend on external AI providers");
   assert.ok(smokeSource.includes("isolatedRedisUrl"), "research e2e smoke should isolate Redis queues from local development state");
   assert.ok(analysisSource.includes("fallbackResearchAnalysis"), "research analysis should fall back when AI providers fail");
   assert.ok(smokeSource.includes("sourceTypes: [\"official\"]"), "research e2e smoke should constrain discovery to local official seed sources");
@@ -502,6 +591,7 @@ function testManualRunIterationControlsAreWired() {
 
   assert.ok(storeSource.includes("export async function appendPlannedQueryForRun"), "store should append a manual planned query without replacing the plan");
   assert.ok(storeSource.includes("export async function resetFailedFrontierItemsForRun"), "store should reset failed/skipped frontier items for retry");
+  assert.ok(storeSource.includes("status IN ('failed', 'skipped', 'fetching')"), "retry should also recover frontier items stranded in fetching after worker failure");
   assert.ok(routesSource.includes('router.post("/runs/:runId/queries"'), "API should expose manual query append");
   assert.ok(routesSource.includes('router.post("/runs/:runId/retry-failed"'), "API should expose failed frontier retry");
   assert.ok(routesSource.includes('attemptReason: "manual"'), "manual query append should enqueue discovery as a manual attempt");
@@ -529,6 +619,33 @@ function testRunClaimsApiIsWired() {
   assert.ok(smokeSource.includes("/api/research/runs/smoke-run/claims"), "Playwright smoke should mock the claims endpoint");
   assert.ok(smokeSource.includes("结论索引"), "Playwright smoke should assert the claims panel");
   assert.ok(readmeSource.includes("/api/research/runs/:runId/claims"), "README should document the run claims API");
+}
+
+function testEvidenceFallbackAndGraphAreMeaningful() {
+  const analysisSource = readFileSync(new URL("./analysis.ts", import.meta.url), "utf8");
+  const runSource = readFileSync(new URL("./run.ts", import.meta.url), "utf8");
+  const storeSource = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const evidencePanelSource = readFileSync(new URL("../../components/research/EvidencePanels.tsx", import.meta.url), "utf8");
+  const workflowPanelSource = readFileSync(new URL("../../components/research/RunWorkflowPanels.tsx", import.meta.url), "utf8");
+  const frontierPanelSource = readFileSync(new URL("../../components/research/FrontierProviderPanels.tsx", import.meta.url), "utf8");
+  const capabilityPanelSource = readFileSync(new URL("../../components/research/CapabilityAuditPanel.tsx", import.meta.url), "utf8");
+  const smokeSource = readFileSync(new URL("../../../scripts/ui-smoke.mjs", import.meta.url), "utf8");
+
+  assert.ok(analysisSource.includes("topicTermHits"), "fallback analysis should expose topic term hit coverage");
+  assert.ok(analysisSource.includes("return { relevanceScore: 0, relevant: false"), "fallback analysis should reject unrelated fetched text instead of creating fake evidence");
+  assert.ok(analysisSource.includes("summarizeEvidenceSnippet"), "fallback analysis should create a source summary from the fetched content");
+  assert.ok(!runSource.includes("fallbackEvidenceFromDocument"), "analyze stage must not fabricate generic evidence when analysis finds no source-backed evidence");
+  assert.ok(!runSource.includes("已抓取与"), "generic fallback evidence copy should not appear in research evidence generation");
+  assert.ok(runSource.includes("updateEvidenceItemClaimId"), "analyze stage should write the generated claim id back onto evidence rows");
+  assert.ok(storeSource.includes("export async function updateEvidenceItemClaimId"), "store should support linking saved evidence to claims");
+  assert.ok(runSource.includes("sourceConfidenceAdjustment"), "credibility should vary by source type, relevance, and topic match coverage");
+  assert.ok(evidencePanelSource.includes("EvidenceGraphCanvas"), "Evidence graph should render a graph-like node/link view, not only a flat list");
+  assert.ok(evidencePanelSource.includes("EvidenceQualityPanel"), "Evidence UI should surface quality risks before the graph is trusted");
+  assert.ok(evidencePanelSource.includes("legacyFallbackEvidence"), "Evidence UI should flag legacy fallback evidence stored by older runs");
+  assert.ok(evidencePanelSource.includes("证据摘要") || evidencePanelSource.includes("Evidence summary"), "Evidence table should surface evidence summaries");
+  assert.ok(workflowPanelSource.includes("newsAnalysisEmptyReason"), "news analysis panel should explain when 0 documents were analyzed");
+  assert.ok(frontierPanelSource.includes("dataSourceDatasetExplanation"), "Data Lab export should explain what dataset is created and how to analyze it");
+  assert.ok(capabilityPanelSource.includes("能力目标") || smokeSource.includes("能力目标"), "pressure smoke UI should label Quick/Standard/Deep as capability targets, not current run results");
 }
 
 function testResearchRuntimeMonitorUiIsWired() {
@@ -592,7 +709,7 @@ function testProviderPanelShowsDataSourceCoverage() {
   assert.ok(frontierProviderSource.includes("data-catalog"), "Provider Panel should expose data catalog provider types");
   assert.ok(frontierProviderSource.includes("structured-api"), "Provider Panel should expose structured API provider types");
   assert.ok(frontierProviderSource.includes("competition-data"), "Provider Panel should expose competition data provider types");
-  assert.ok(smokeSource.includes("/打开\\s*Data Lab/"), "Playwright smoke should assert the Data Lab navigation entry");
+  assert.ok(smokeSource.includes("生成 Data Lab 数据源清单"), "Playwright smoke should assert the data-source registry entry");
   assert.ok(smokeSource.includes("回到 Research run"), "Playwright smoke should assert round-trip navigation from Data Lab");
   assert.ok(smokeSource.includes("数据源覆盖"), "Playwright smoke should assert data source coverage output");
   assert.ok(smokeSource.includes("data-catalog"), "Playwright smoke should assert data catalog provider type output");
@@ -639,7 +756,9 @@ function testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets() {
     KAGGLE_USERNAME: "demo",
     KAGGLE_KEY: "kaggle-real-key-12345",
     FRED_API_KEY: "fred-real-key-12345",
-    OPENAI_API_KEY: "openai-real-key-12345",
+    AI_BASE_URL: "https://relay.example.com/v1",
+    AI_API_KEY: "relay-real-key-12345",
+    AI_MODEL: "gpt-5.4",
   });
 
   assert.equal(audit.storage.ready, true, "capability audit should mark Postgres storage ready from DATABASE_URL");
@@ -655,7 +774,8 @@ function testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets() {
   assert.ok(audit.envChecklist.some((item) => item.name === "DATABASE_URL" && item.configured && item.requiredLevel === "required"), "audit should expose required DATABASE_URL env");
   assert.ok(audit.envChecklist.some((item) => item.name === "BRAVE_API_KEY" && item.configured && item.requiredLevel === "at-least-one"), "audit should expose configured search env");
   assert.ok(audit.envChecklist.some((item) => item.name === "SERPAPI_API_KEY" && !item.configured && item.requiredFor100), "audit should expose missing search env");
-  assert.ok(audit.envChecklist.some((item) => item.name === "OPENAI_API_KEY" && item.configured && item.group === "ai"), "audit should expose AI env");
+  assert.ok(audit.envChecklist.some((item) => item.name === "AI_API_KEY" && item.configured && item.group === "ai"), "audit should expose AI key env");
+  assert.ok(audit.envChecklist.some((item) => item.name === "AI_BASE_URL" && item.configured && item.group === "ai"), "audit should expose AI base URL env");
   assert.ok(audit.envChecklist.every((item) => !("value" in item)), "audit must not expose secret env values");
   assert.ok(audit.extractorSamples.some((item) => item.name === "structured-data"), "audit should expose structured-data extractor sample");
   assert.ok(audit.extractorSamples.length >= 8, "audit should expose every extractor sample");
@@ -694,8 +814,8 @@ function testResearchCapabilityAuditApiAndUiAreWired() {
   assert.ok(smokeSource.includes("Agent Console"), "UI smoke should assert Agent Console capability surface");
   assert.ok(smokeSource.includes("Env 配置清单"), "UI smoke should assert env checklist visibility");
   assert.ok(smokeSource.includes("BRAVE_API_KEY"), "UI smoke should assert search env visibility");
-  assert.ok(smokeSource.includes("OPENAI_API_KEY"), "UI smoke should assert AI env visibility");
-  assert.ok(smokeSource.includes("Deep / 500 URL"), "UI smoke should assert Deep pressure visibility");
+  assert.ok(smokeSource.includes("AI_API_KEY"), "UI smoke should assert AI env visibility");
+  assert.ok(smokeSource.includes("能力目标 / Deep"), "UI smoke should assert Deep pressure visibility as a capability target");
 }
 
 async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
@@ -897,6 +1017,7 @@ testBudgetLimits();
 testProviderNormalization();
 testDiscoveryCandidateNormalization();
 testAiProviderRouting();
+testKaggleApiTokenEnablesDataProvider();
 testFrontierPriorityScoring();
 testExtractorRoutingAndTableExtraction();
 testCredibilityAndEvidenceGraph();
@@ -904,6 +1025,7 @@ testDefaultDiscoveryProvidersIncludeDataSources();
 testPlannerClassifiesToolEvaluation();
 testPlannerClassifiesDataResearch();
 testPlannerClassifiesGenericDataResearch();
+testResearchPlanningAgentExpandsTopicSpecificSubQuestions();
 testPlannerClassifiesVerification();
 testPlannerAddsSeedDomainQueries();
 testPlannerHonorsResearchConstraints();
@@ -911,6 +1033,10 @@ testReportGeneration();
 testRSSSourceUrlValidation();
 testResearchQueueNames();
 testResearchSchemaCreatesReferencedTablesBeforeRelations();
+testResearchStoreProtectsSchemaInitAndSanitizesCrawlerText();
+testDocumentSearchUsesHybridFieldsBeyondContentText();
+testResearchUiExplainsRunTransparencyAndProviderMeaning();
+testDiscoveryIsBoundedAndObservable();
 testStructuredResearchPlanPersistenceIsWired();
 testResearchE2eUsesOfflineDiscoveryMode();
 testUiSmokeDoesNotConsumeResearchQueues();
@@ -919,6 +1045,7 @@ testEvidenceGraphUiIsWired();
 testDocumentLinksArePersistentAndVisible();
 testManualRunIterationControlsAreWired();
 testRunClaimsApiIsWired();
+testEvidenceFallbackAndGraphAreMeaningful();
 testResearchRuntimeMonitorUiIsWired();
 testSourceExplorerFetchDiagnosticsAreVisible();
 testProviderPanelShowsDataSourceCoverage();

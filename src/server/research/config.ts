@@ -1,9 +1,8 @@
 export interface ResearchConfig {
   databaseUrl?: string;
   redisUrl?: string;
-  aiProvider?: string;
-  openaiApiKey?: string;
-  geminiApiKey?: string;
+  aiBaseUrl?: string;
+  aiApiKey?: string;
   aiModel: string;
   braveApiKey?: string;
   serpApiKey?: string;
@@ -11,6 +10,7 @@ export interface ResearchConfig {
   newsApiKey?: string;
   githubToken?: string;
   fredApiKey?: string;
+  kaggleApiToken?: string;
   kaggleUsername?: string;
   kaggleKey?: string;
   browserProvider: "local" | "browserless";
@@ -68,10 +68,10 @@ export interface ResearchConfigStatus {
   };
   ai: {
     provider: string;
+    baseUrl: string;
     model: string;
     configured: boolean;
-    openaiConfigured: boolean;
-    geminiConfigured: boolean;
+    keyConfigured: boolean;
   };
   enabledSearchProviderCount: number;
   enabledDataProviderCount: number;
@@ -92,16 +92,16 @@ export function getResearchConfig(env = process.env): ResearchConfig {
   return {
     databaseUrl: env.DATABASE_URL,
     redisUrl: env.REDIS_URL,
-    aiProvider: env.AI_PROVIDER || "openai",
-    openaiApiKey: env.OPENAI_API_KEY,
-    geminiApiKey: env.GEMINI_API_KEY,
-    aiModel: env.AI_MODEL || env.OPENAI_MODEL || "gpt-5.4",
+    aiBaseUrl: normalizeAiBaseUrl(env.AI_BASE_URL),
+    aiApiKey: env.AI_API_KEY,
+    aiModel: env.AI_MODEL || "gpt-5.4",
     braveApiKey: env.BRAVE_API_KEY,
     serpApiKey: env.SERPAPI_API_KEY,
     tavilyApiKey: env.TAVILY_API_KEY,
     newsApiKey: env.NEWSAPI_KEY || env.NEWS_API_KEY,
     githubToken: env.GITHUB_TOKEN,
     fredApiKey: env.FRED_API_KEY,
+    kaggleApiToken: env.KAGGLE_API_TOKEN,
     kaggleUsername: env.KAGGLE_USERNAME,
     kaggleKey: env.KAGGLE_KEY,
     browserProvider: env.RESEARCH_BROWSER_PROVIDER === "browserless" ? "browserless" : "local",
@@ -113,6 +113,7 @@ export function getResearchConfig(env = process.env): ResearchConfig {
 
 export function getResearchConfigStatus(config = getResearchConfig()): ResearchConfigStatus {
   const activeAiProvider = resolveAiProvider(config);
+  const keyConfigured = isValidApiKey(config.aiApiKey, "MY_AI_API_KEY");
   const searchProviders = {
     brave: Boolean(config.braveApiKey),
     serpApi: Boolean(config.serpApiKey),
@@ -126,7 +127,7 @@ export function getResearchConfigStatus(config = getResearchConfig()): ResearchC
     ckan: true,
     socrata: true,
     arcgis: true,
-    kaggle: Boolean(config.kaggleUsername && config.kaggleKey),
+    kaggle: hasKaggleCredentials(config),
     huggingFace: true,
     openMl: true,
     worldBank: true,
@@ -142,11 +143,11 @@ export function getResearchConfigStatus(config = getResearchConfig()): ResearchC
     searchProviders,
     dataProviders,
     ai: {
-      provider: activeAiProvider ?? config.aiProvider ?? "openai",
+      provider: activeAiProvider ?? "gpt-compatible",
+      baseUrl: resolveAiBaseUrl(config),
       model: resolveAiModel(config),
       configured: Boolean(activeAiProvider),
-      openaiConfigured: isValidApiKey(config.openaiApiKey, "MY_OPENAI_API_KEY"),
-      geminiConfigured: isValidApiKey(config.geminiApiKey, "MY_GEMINI_API_KEY"),
+      keyConfigured,
     },
     enabledSearchProviderCount: Object.values(searchProviders).filter(Boolean).length,
     enabledDataProviderCount: Object.values(dataProviders).filter(Boolean).length,
@@ -155,25 +156,18 @@ export function getResearchConfigStatus(config = getResearchConfig()): ResearchC
   };
 }
 
-export type ActiveAiProvider = "openai" | "gemini";
+export type ActiveAiProvider = "gpt-compatible";
 
 export function resolveAiProvider(config = getResearchConfig()): ActiveAiProvider | null {
-  const preferred = (config.aiProvider || "openai").toLowerCase();
-  const openaiReady = isValidApiKey(config.openaiApiKey, "MY_OPENAI_API_KEY");
-  const geminiReady = isValidApiKey(config.geminiApiKey, "MY_GEMINI_API_KEY");
-
-  if (preferred === "openai" && openaiReady) return "openai";
-  if (preferred === "gemini" && geminiReady) return "gemini";
-  if (openaiReady) return "openai";
-  if (geminiReady) return "gemini";
-  return null;
+  return isValidApiKey(config.aiApiKey, "MY_AI_API_KEY") ? "gpt-compatible" : null;
 }
 
 export function resolveAiModel(config = getResearchConfig()) {
-  const provider = resolveAiProvider(config);
-  if (provider === "openai") return config.aiModel;
-  if (provider === "gemini") return "gemini-2.0-flash";
   return config.aiModel;
+}
+
+export function resolveAiBaseUrl(config = getResearchConfig()) {
+  return normalizeAiBaseUrl(config.aiBaseUrl);
 }
 
 export function requireResearchDatabase(config = getResearchConfig()) {
@@ -233,6 +227,10 @@ export function isValidApiKey(value: string | undefined, placeholder?: string) {
   return value.trim().length > 10;
 }
 
+export function hasKaggleCredentials(config: Pick<ResearchConfig, "kaggleApiToken" | "kaggleUsername" | "kaggleKey">) {
+  return isValidApiKey(config.kaggleApiToken, "MY_KAGGLE_API_TOKEN") || Boolean(config.kaggleUsername && config.kaggleKey);
+}
+
 function positiveInt(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -241,4 +239,9 @@ function positiveInt(value: string | undefined, fallback: number) {
 function parseBoolean(value: string | undefined, fallback: boolean) {
   if (value === undefined || value === "") return fallback;
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function normalizeAiBaseUrl(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed || "https://api.openai.com/v1";
 }

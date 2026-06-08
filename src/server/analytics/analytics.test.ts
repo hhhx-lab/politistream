@@ -295,7 +295,7 @@ function testDataLabSurfacesAdvancedTools() {
   assert.ok(smokeSource.includes("取消任务"), "Playwright smoke should assert job cancel controls");
   assert.ok(smokeSource.includes("导出资产"), "Playwright smoke should assert artifact export controls");
   assert.ok(smokeSource.includes("/api/analytics/datasets/from-research-run/smoke-run/data-sources"), "Playwright smoke should mock research data source dataset export");
-  assert.ok(smokeSource.includes("导入数据源候选"), "Playwright smoke should assert data source export controls");
+  assert.ok(smokeSource.includes("生成 Data Lab 数据源清单"), "Playwright smoke should assert data source registry export controls");
   assert.ok(smokeSource.includes("已定位 Research 数据源上下文"), "Playwright smoke should assert Research-to-Data-Lab focused navigation");
   assert.ok(smokeSource.includes("回到 Research run"), "Playwright smoke should assert Data-Lab-to-Research navigation");
   assert.ok(smokeSource.includes("数据源筛选"), "Playwright smoke should assert data source filters");

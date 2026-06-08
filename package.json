@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "sh -c 'npm run dev:backend & backend=$!; npm run dev:frontend; kill $backend 2>/dev/null'",
+    "start:all": "node scripts/start-all.mjs",
     "dev:backend": "tsx server.ts",
     "dev:frontend": "vite --host 0.0.0.0",
     "build": "vite build",
@@ -28,7 +29,6 @@
     "smoke:research-capabilities": "node --import tsx scripts/research-capability-smoke.mjs"
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/pg": "^8.20.0",

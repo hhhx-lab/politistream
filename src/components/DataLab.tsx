@@ -89,7 +89,7 @@ const text = {
     apiSurfaceHint: '计划短路径已经映射到现有 Postgres / Worker / Artifact 能力。',
     dataSourceRegistry: '数据源资产清单',
     dataSourceRegistryHint: 'Research Provider 面板可以把 data-catalog、structured-api、competition-data、sports-data 候选导入为 Data Lab 数据集，保留 provider、优先级、格式、许可提示和 lineage。',
-    dataSourceRegistryEmpty: '暂无 Research 数据源资产清单。先在 Research 的 Provider 面板点击“导入数据源候选”。',
+    dataSourceRegistryEmpty: '暂无 Research 数据源资产清单。先在 Research 的 Provider 面板点击“生成 Data Lab 数据源清单”。',
     sourceFilters: '数据源筛选',
     sourceSearchPlaceholder: '按标题、URL、provider、query 搜索',
     allProviders: '全部 Provider',
@@ -243,7 +243,7 @@ const text = {
     apiSurfaceHint: 'Plan-level short paths are mapped to the existing Postgres / worker / artifact stack.',
     dataSourceRegistry: 'Data source asset registry',
     dataSourceRegistryHint: 'The Research Provider Panel can import data-catalog, structured-api, competition-data, and sports-data candidates as a Data Lab dataset with provider, priority, format, license hints, and lineage.',
-    dataSourceRegistryEmpty: 'No Research data source registry yet. Click "Import data source candidates" in the Research Provider Panel first.',
+    dataSourceRegistryEmpty: 'No Research data source registry yet. Click "Create Data Lab source registry" in the Research Provider Panel first.',
     sourceFilters: 'Source filters',
     sourceSearchPlaceholder: 'Search title, URL, provider, or query',
     allProviders: 'All providers',
@@ -378,6 +378,23 @@ type MaterializeResultState = {
   rows?: number;
 };
 
+type DataLabPage = 'home' | 'import' | 'dataset' | 'wizard' | 'analysis' | 'visuals' | 'sources' | 'activity' | 'system';
+
+function dataLabPages(language: Language): Array<{ id: DataLabPage; label: string; hint: string; icon: React.ReactNode }> {
+  const zh = language === 'zh';
+  return [
+    { id: 'home', label: zh ? '首页' : 'Home', hint: zh ? '选择下一步工作流。' : 'Choose the next workflow.', icon: <FlaskConical size={15} /> },
+    { id: 'import', label: zh ? '导入数据' : 'Import', hint: zh ? '上传文件或粘贴 JSON rows。' : 'Upload files or paste JSON rows.', icon: <Upload size={15} /> },
+    { id: 'dataset', label: zh ? '数据集' : 'Dataset', hint: zh ? '预览、画像、校验、清洗和查询。' : 'Preview, profile, validate, clean, query.', icon: <Database size={15} /> },
+    { id: 'wizard', label: zh ? '分析向导' : 'Wizard', hint: zh ? '按研究问题跑 SPSS 式流程。' : 'Run SPSS-style workflows by question.', icon: <Sparkles size={15} /> },
+    { id: 'analysis', label: zh ? '统计建模' : 'Analysis', hint: zh ? '统计、建模、文本、时间序列。' : 'Stats, modeling, text, time series.', icon: <BrainCircuit size={15} /> },
+    { id: 'visuals', label: zh ? '图表报告' : 'Charts', hint: zh ? '论文图、交互图和报告导出。' : 'Publication charts and exports.', icon: <LineChart size={15} /> },
+    { id: 'sources', label: zh ? '数据源资产' : 'Sources', hint: zh ? '把 Research 数据源落成数据集。' : 'Materialize Research data sources.', icon: <Network size={15} /> },
+    { id: 'activity', label: zh ? '任务产物' : 'Activity', hint: zh ? 'Jobs、artifacts、下载和重跑。' : 'Jobs, artifacts, downloads, reruns.', icon: <FileJson size={15} /> },
+    { id: 'system', label: zh ? '系统接口' : 'System', hint: zh ? 'API surface 和能力目录。' : 'API surface and capability catalog.', icon: <Activity size={15} /> },
+  ];
+}
+
 export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearchRun }) => {
   const copy = text[language];
   const [capabilities, setCapabilities] = useState<AnalyticsCapability[]>([]);
@@ -404,6 +421,7 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
   const [appliedFocusKey, setAppliedFocusKey] = useState('');
   const [busyKind, setBusyKind] = useState<string>('');
   const [error, setError] = useState('');
+  const [activePage, setActivePage] = useState<DataLabPage>('home');
 
   const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId);
   const dataSourceDatasets = useMemo(
@@ -413,8 +431,11 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
   const activeDataSourceDataset = selectedDataset?.sourceKind === 'research-data-source'
     ? selectedDataset
     : dataSourceDatasets[0];
+  const activeDataSourceRunId = activeDataSourceDataset ? runIdFromDataset(activeDataSourceDataset) : '';
   const toolGroups = useMemo<ToolGroup[]>(() => buildToolGroups(language), [language]);
   const apiEndpoints = useMemo(() => buildApiSurface(language), [language]);
+  const labPages = useMemo(() => dataLabPages(language), [language]);
+  const activePageMeta = labPages.find((page) => page.id === activePage) ?? labPages[0];
   const selectedVersionHistory = useMemo(
     () => selectedDataset ? buildMaterializedVersionHistory(selectedDataset, datasets) : [],
     [selectedDataset, datasets],
@@ -509,6 +530,7 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
     const match = datasetMatch ?? runMatch;
     if (!match) return;
     selectDatasetSummary(match, { clearOperation: false });
+    setActivePage(match.sourceKind === 'research-data-source' ? 'sources' : 'dataset');
     recordDatasetOperationPayload({
       operation: copy.researchContextLinked,
       runId: focus?.runId,
@@ -841,6 +863,7 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
       setSelectedDatasetId(nextDataset.id);
       setDatasetName(nextDataset.name);
       setRowsText(JSON.stringify(nextDataset.sampleRows ?? [], null, 2));
+      setActivePage('dataset');
       setProfile(data.profile ?? null);
       setSuggestions(data.suggestions ?? []);
       recordDatasetOperationPayload({
@@ -980,17 +1003,38 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
   return (
     <div className="h-full overflow-y-auto bg-[#F1EFE7] text-[#151515]">
       <div className="mx-auto max-w-[1500px] p-5 lg:p-8">
-        <header className="grid gap-4 border-b-2 border-[#151515] pb-5 lg:grid-cols-[minmax(0,1fr)_26rem]">
-          <div>
-            <div className="mb-3 font-mono text-xs uppercase tracking-[0.32em] text-[#567068]">{copy.subtitle}</div>
-            <h1 className="font-serif text-5xl leading-none lg:text-7xl">{copy.title}</h1>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-stone-700">{copy.hero}</p>
+        <header className="border-2 border-[#151515] bg-[#F9F7EF]">
+          <div className="grid gap-4 border-b-2 border-[#151515] p-5 lg:grid-cols-[minmax(0,1fr)_26rem]">
+            <div>
+              <div className="mb-3 font-mono text-xs uppercase tracking-[0.32em] text-[#567068]">{copy.subtitle}</div>
+              <h1 className="font-serif text-5xl leading-none lg:text-7xl">{copy.title}</h1>
+              <p className="mt-4 max-w-3xl text-base leading-7 text-stone-700">{copy.hero}</p>
+              <div className="mt-4 inline-flex items-center gap-2 border border-stone-300 bg-white px-3 py-2 font-mono text-[10px] uppercase">
+                {activePageMeta.icon}
+                {activePageMeta.label}
+              </div>
+            </div>
+            <div className="grid grid-cols-3 border-2 border-[#151515] bg-white">
+              <StatusTile label={copy.datasets} value={datasets.length} />
+              <StatusTile label={copy.jobs} value={jobs.length} />
+              <StatusTile label={copy.artifacts} value={artifacts.length} />
+            </div>
           </div>
-          <div className="grid grid-cols-3 border-2 border-[#151515] bg-[#F9F7EF]">
-            <StatusTile label={copy.datasets} value={datasets.length} />
-            <StatusTile label={copy.jobs} value={jobs.length} />
-            <StatusTile label={copy.artifacts} value={artifacts.length} />
-          </div>
+          <nav className="flex gap-2 overflow-x-auto p-3">
+            {labPages.map((page) => (
+              <button
+                key={page.id}
+                onClick={() => setActivePage(page.id)}
+                className={`min-w-[9.5rem] shrink-0 border px-3 py-2 text-left transition ${activePage === page.id ? 'border-[#151515] bg-[#151515] text-white' : 'border-stone-300 bg-white hover:border-[#151515]'}`}
+              >
+                <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
+                  {page.icon}
+                  {page.label}
+                </div>
+                <div className={`mt-1 text-[11px] leading-4 ${activePage === page.id ? 'text-stone-200' : 'text-stone-500'}`}>{page.hint}</div>
+              </button>
+            ))}
+          </nav>
         </header>
 
         {error && (
@@ -999,33 +1043,62 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
           </div>
         )}
 
-        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(26rem,0.85fr)]">
-          <main className="space-y-5 min-w-0">
-            <section className="grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(20rem,0.95fr)]">
+        <main className="mt-5 space-y-5">
+          {activePage === 'home' && (
+            <section className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {labPages.filter((page) => page.id !== 'home' && page.id !== 'system').slice(0, 7).map((page) => (
+                  <button key={page.id} onClick={() => setActivePage(page.id)} className="border-2 border-[#151515] bg-white p-4 text-left transition hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#151515]">
+                    <div className="mb-3 flex h-9 w-9 items-center justify-center border-2 border-[#151515] bg-[#E6F2EF]">{page.icon}</div>
+                    <div className="font-serif text-2xl leading-tight">{page.label}</div>
+                    <p className="mt-2 text-sm leading-6 text-stone-600">{page.hint}</p>
+                  </button>
+                ))}
+              </div>
+              <section className="grid gap-5 lg:grid-cols-3">
+                <ListPanel title={copy.datasets} empty={copy.empty}>
+                  {datasets.slice(0, 5).map((dataset) => (
+                    <button key={dataset.id} onClick={() => { selectDatasetSummary(dataset); setActivePage('dataset'); }} className="w-full border border-stone-300 bg-white p-3 text-left hover:border-[#151515]">
+                      <div className="font-mono text-[10px] uppercase text-stone-500">{dataset.sourceKind} / {dataset.rowCount} x {dataset.columnCount}</div>
+                      <div className="mt-1 truncate font-serif text-lg">{dataset.name}</div>
+                      <div className="mt-1 text-xs text-stone-500">{formatDate(dataset.createdAt)}</div>
+                    </button>
+                  ))}
+                </ListPanel>
+                <ListPanel title={copy.jobs} empty={copy.empty}>
+                  {jobs.slice(0, 5).map((job) => (
+                    <div key={job.id} className="border border-stone-300 bg-white p-3">
+                      <div className="font-mono text-[10px] uppercase text-stone-500">{job.kind} / {job.status}</div>
+                      <div className="mt-1 font-serif text-lg">{job.id.slice(0, 8)}</div>
+                      <div className="mt-1 text-xs text-stone-500">{formatDate(job.createdAt)}</div>
+                    </div>
+                  ))}
+                </ListPanel>
+                <ListPanel title={copy.artifacts} empty={copy.empty}>
+                  {artifacts.slice(0, 5).map((artifact) => (
+                    <div key={artifact.id} className="border border-stone-300 bg-white p-3">
+                      <div className="font-mono text-[10px] uppercase text-stone-500">{artifact.artifactType}</div>
+                      <div className="mt-1 truncate font-serif text-lg">{artifact.title}</div>
+                      <div className="mt-1 text-xs text-stone-500">{formatDate(artifact.createdAt)}</div>
+                    </div>
+                  ))}
+                </ListPanel>
+              </section>
+            </section>
+          )}
+
+          {activePage === 'import' && (
+            <section className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)]">
               <Panel title={copy.ingest} icon={<Upload size={18} />} accent="#B9472A">
                 <div className="space-y-3">
-                  <input
-                    value={datasetName}
-                    onChange={(event) => setDatasetName(event.target.value)}
-                    placeholder={copy.datasetName}
-                    className="w-full border-2 border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#151515]"
-                  />
+                  <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} placeholder={copy.datasetName} className="w-full border-2 border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#151515]" />
                   <div className="grid gap-2 sm:grid-cols-[9rem_minmax(0,1fr)]">
-                    <select
-                      value={importKind}
-                      onChange={(event) => setImportKind(event.target.value)}
-                      className="border-2 border-stone-300 bg-white px-3 py-2 text-xs font-mono uppercase outline-none focus:border-[#151515]"
-                      aria-label={copy.importKind}
-                    >
-                      {['json', 'jsonl', 'csv', 'html', 'table', 'excel', 'parquet', 'geojson', 'txt', 'md', 'pdf', 'docx', 'pptx'].map((kind) => (
-                        <option key={kind} value={kind}>{kind}</option>
-                      ))}
+                    <select value={importKind} onChange={(event) => setImportKind(event.target.value)} className="border-2 border-stone-300 bg-white px-3 py-2 text-xs font-mono uppercase outline-none focus:border-[#151515]" aria-label={copy.importKind}>
+                      {['json', 'jsonl', 'csv', 'html', 'table', 'excel', 'parquet', 'geojson', 'txt', 'md', 'pdf', 'docx', 'pptx'].map((kind) => <option key={kind} value={kind}>{kind}</option>)}
                     </select>
                     <label className="flex cursor-pointer items-center justify-between gap-3 border-2 border-stone-300 bg-white px-3 py-2 text-xs font-mono uppercase hover:border-[#151515]">
                       <span className="inline-flex items-center gap-2"><Upload size={14} />{copy.chooseFile}</span>
-                      <span className="truncate text-[10px] normal-case text-stone-500">
-                        {importFile ? importFile.name : copy.noFile}
-                      </span>
+                      <span className="truncate text-[10px] normal-case text-stone-500">{importFile ? importFile.name : copy.noFile}</span>
                       <input
                         type="file"
                         className="hidden"
@@ -1041,12 +1114,7 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
                     </label>
                   </div>
                   <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.importFormats}</div>
-                  <textarea
-                    value={rowsText}
-                    onChange={(event) => setRowsText(event.target.value)}
-                    className="min-h-44 w-full border-2 border-stone-300 bg-[#FFFCF4] p-3 font-mono text-xs leading-5 outline-none focus:border-[#151515]"
-                    aria-label={copy.manualRows}
-                  />
+                  <textarea value={rowsText} onChange={(event) => setRowsText(event.target.value)} className="min-h-64 w-full border-2 border-stone-300 bg-[#FFFCF4] p-3 font-mono text-xs leading-5 outline-none focus:border-[#151515]" aria-label={copy.manualRows} />
                   <div className="grid gap-2 sm:grid-cols-4">
                     <ActionButton active={busyKind === 'import'} onClick={importDataset} icon={<Upload size={14} />} label={copy.importDataset} tone="dark" />
                     <ActionButton active={busyKind === 'save'} onClick={saveDataset} icon={<Database size={14} />} label={copy.saveManual} />
@@ -1055,398 +1123,210 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
                   </div>
                 </div>
               </Panel>
-
               <Panel title={copy.selectedDataset} icon={<Database size={18} />} accent="#16605D">
-                {selectedDataset ? (
-                  <div className="space-y-4">
-                    <div>
-                      <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{selectedDataset.sourceKind}</div>
-                      <div className="mt-1 font-serif text-3xl leading-tight">{selectedDataset.name}</div>
-                      <div className="mt-2 break-all font-mono text-[10px] text-stone-500">{selectedDataset.id}</div>
-                    </div>
-                    <div className="grid grid-cols-4 border-2 border-[#151515] bg-white">
-                      <StatusTile label={copy.rows} value={selectedDataset.rowCount} />
-                      <StatusTile label={copy.cols} value={selectedDataset.columnCount} />
-                      <StatusTile label={copy.preview} value={selectedDataset.sampleRows?.length ?? 0} />
-                      <StatusTile label={copy.quality} value={profile ? `${Math.round(profile.qualityScore * 100)}%` : '-'} />
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <MiniMetric label={copy.storage} value={String(selectedDataset.metadata?.storage && typeof selectedDataset.metadata.storage === 'object' ? (selectedDataset.metadata.storage as Record<string, unknown>).rowStorage ?? 'postgres' : 'postgres')} />
-                      <MiniMetric label={copy.sampleLimit} value={String(selectedDataset.metadata?.storage && typeof selectedDataset.metadata.storage === 'object' ? (selectedDataset.metadata.storage as Record<string, unknown>).sampleRowLimit ?? selectedDataset.sampleRows?.length ?? 0 : selectedDataset.sampleRows?.length ?? 0)} />
-                    </div>
-                    <div className="max-h-36 overflow-auto border border-stone-300 bg-[#FFFCF4] p-2 font-mono text-[10px]">
-                      {JSON.stringify(selectedDataset.metadata ?? {}, null, 2)}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex h-full min-h-52 items-center justify-center border border-dashed border-stone-300 bg-white/60 p-6 text-center text-sm text-stone-500">
-                    {copy.noDataset}
-                  </div>
-                )}
+                {selectedDataset ? <DatasetSummaryBlock dataset={selectedDataset} profile={profile} copy={copy} /> : <EmptyBlock text={copy.noDataset} />}
               </Panel>
             </section>
+          )}
 
-            <Panel title={copy.datasetWorkbench} icon={<Database size={18} />} accent="#6C4AB6">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-                <div className="space-y-3">
-                  <p className="text-sm leading-6 text-stone-600">{copy.datasetWorkbenchHint}</p>
-                  {selectedDataset && runIdFromDataset(selectedDataset) && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 border border-stone-300 bg-white p-3">
-                      <div className="min-w-0">
-                        <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.linkedRun}</div>
-                        <div className="mt-1 break-all font-mono text-xs">{runIdFromDataset(selectedDataset)}</div>
-                      </div>
-                      {onOpenResearchRun && (
-                        <button
-                          onClick={() => onOpenResearchRun(runIdFromDataset(selectedDataset))}
-                          className="inline-flex min-h-9 items-center gap-2 border border-[#151515] px-3 py-2 font-mono text-[10px] uppercase hover:bg-[#151515] hover:text-white"
-                        >
-                          <ExternalLink size={13} />
-                          {copy.openResearchRun}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {selectedDataset?.sourceKind === 'materialized-data-source' && (
-                    <div className="border border-[#16605D] bg-[#E6F2EF] p-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.snapshotLineage}</div>
-                          <p className="mt-1 text-sm leading-6 text-stone-700">{copy.refreshSourceHint}</p>
-                          <div className="mt-2 break-all font-mono text-[10px] text-stone-600">{sourceUrlFromDataset(selectedDataset)}</div>
-                        </div>
-                        <button
-                          onClick={refreshMaterializedDataset}
-                          disabled={busyKind === 'materialized-refresh'}
-                          className="inline-flex min-h-9 items-center gap-2 border-2 border-[#16605D] bg-white px-3 py-2 font-mono text-[10px] uppercase text-[#16605D] hover:bg-[#16605D] hover:text-white disabled:opacity-60"
-                        >
-                          {busyKind === 'materialized-refresh' ? <Activity size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                          {copy.refreshMaterializedSource}
-                        </button>
-                      </div>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                        <MiniMetric label={copy.snapshotVersion} value={materializedVersionFromDataset(selectedDataset)} />
-                        <MiniMetric label={copy.rows} value={selectedDataset.rowCount} />
-                        <MiniMetric label={copy.storage} value={String((selectedDataset.metadata?.storage as Record<string, unknown> | undefined)?.rowStorage ?? 'postgres')} />
-                      </div>
-                      <div className="mt-3 border border-[#16605D]/40 bg-white/70 p-2">
-                        <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-[#16605D]">{copy.versionHistory}</div>
-                        {selectedVersionHistory.length > 1 ? (
-                          <div className="flex gap-2 overflow-x-auto pb-1">
-                            {selectedVersionHistory.map((version) => (
-                              <button
-                                key={version.id}
-                                onClick={() => {
-                                  setSelectedDatasetId(version.id);
-                                  setDatasetName(version.name);
-                                  setRowsText(JSON.stringify(version.sampleRows, null, 2));
-                                }}
-                                className={`shrink-0 border px-3 py-2 text-left ${version.id === selectedDataset.id ? 'border-[#16605D] bg-[#E6F2EF]' : 'border-stone-300 bg-white hover:border-[#16605D]'}`}
-                              >
-                                <div className="font-mono text-[10px] uppercase text-stone-500">v{materializedVersionFromDataset(version)} / {version.rowCount} {copy.rows}</div>
-                                <div className="max-w-52 truncate text-xs">{version.id}</div>
-                              </button>
-                            ))}
+          {activePage === 'dataset' && (
+            <section className="space-y-5">
+              <section className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <Panel title={copy.selectedDataset} icon={<Database size={18} />} accent="#16605D">
+                  {selectedDataset ? <DatasetSummaryBlock dataset={selectedDataset} profile={profile} copy={copy} /> : <EmptyBlock text={copy.noDataset} />}
+                </Panel>
+                <Panel title={copy.datasetWorkbench} icon={<Database size={18} />} accent="#6C4AB6">
+                  <div className="space-y-3">
+                    <p className="text-sm leading-6 text-stone-600">{copy.datasetWorkbenchHint}</p>
+                    {selectedDataset && runIdFromDataset(selectedDataset) && onOpenResearchRun && (
+                      <button onClick={() => onOpenResearchRun(runIdFromDataset(selectedDataset))} className="inline-flex min-h-9 items-center gap-2 border border-[#151515] px-3 py-2 font-mono text-[10px] uppercase hover:bg-[#151515] hover:text-white">
+                        <ExternalLink size={13} />{copy.openResearchRun}
+                      </button>
+                    )}
+                    {selectedDataset?.sourceKind === 'materialized-data-source' && (
+                      <div className="border border-[#16605D] bg-[#E6F2EF] p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.snapshotLineage}</div>
+                            <p className="mt-1 text-sm leading-6 text-stone-700">{copy.refreshSourceHint}</p>
+                            <div className="mt-2 break-all font-mono text-[10px] text-stone-600">{sourceUrlFromDataset(selectedDataset)}</div>
                           </div>
-                        ) : (
-                          <div className="text-xs text-stone-500">{copy.noVersionHistory}</div>
-                        )}
+                          <button onClick={refreshMaterializedDataset} disabled={busyKind === 'materialized-refresh'} className="inline-flex min-h-9 items-center gap-2 border-2 border-[#16605D] bg-white px-3 py-2 font-mono text-[10px] uppercase text-[#16605D] hover:bg-[#16605D] hover:text-white disabled:opacity-60">
+                            {busyKind === 'materialized-refresh' ? <Activity size={13} className="animate-spin" /> : <RefreshCw size={13} />}{copy.refreshMaterializedSource}
+                          </button>
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          <MiniMetric label={copy.snapshotVersion} value={materializedVersionFromDataset(selectedDataset)} />
+                          <MiniMetric label={copy.rows} value={selectedDataset.rowCount} />
+                          <MiniMetric label={copy.storage} value={String((selectedDataset.metadata?.storage as Record<string, unknown> | undefined)?.rowStorage ?? 'postgres')} />
+                        </div>
+                        <div className="mt-3 border border-[#16605D]/40 bg-white/70 p-2">
+                          <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-[#16605D]">{copy.versionHistory}</div>
+                          {selectedVersionHistory.length > 1 ? (
+                            <div className="flex gap-2 overflow-x-auto pb-1">
+                              {selectedVersionHistory.map((version) => (
+                                <button
+                                  key={version.id}
+                                  onClick={() => selectDatasetSummary(version)}
+                                  className={`shrink-0 border px-3 py-2 text-left ${version.id === selectedDataset.id ? 'border-[#16605D] bg-[#E6F2EF]' : 'border-stone-300 bg-white hover:border-[#16605D]'}`}
+                                >
+                                  <div className="font-mono text-[10px] uppercase text-stone-500">v{materializedVersionFromDataset(version)} / {version.rowCount} {copy.rows}</div>
+                                  <div className="max-w-52 truncate text-xs">{version.id}</div>
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-stone-500">{copy.noVersionHistory}</div>
+                          )}
+                        </div>
                       </div>
+                    )}
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <ActionButton active={busyKind === 'dataset-validate'} onClick={runDatasetValidation} icon={<Activity size={14} />} label={copy.validateDataset} tone="dark" />
+                      <ActionButton active={busyKind === 'dataset-clean'} onClick={runDatasetCleaning} icon={<GitBranch size={14} />} label={copy.cleanDataset} />
+                      <ActionButton active={busyKind === 'dataset-query'} onClick={runDatasetQuery} icon={<TableProperties size={14} />} label={copy.queryDataset} />
                     </div>
-                  )}
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    <ActionButton active={busyKind === 'dataset-validate'} onClick={runDatasetValidation} icon={<Activity size={14} />} label={copy.validateDataset} tone="dark" />
-                    <ActionButton active={busyKind === 'dataset-clean'} onClick={runDatasetCleaning} icon={<GitBranch size={14} />} label={copy.cleanDataset} />
-                    <ActionButton active={busyKind === 'dataset-query'} onClick={runDatasetQuery} icon={<TableProperties size={14} />} label={copy.queryDataset} />
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                      <input value={datasetQueryFields} onChange={(event) => setDatasetQueryFields(event.target.value)} placeholder={copy.queryFieldsPlaceholder} aria-label={copy.queryFields} className="w-full border-2 border-stone-300 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[#151515]" />
+                      <input value={datasetQueryLimit} onChange={(event) => setDatasetQueryLimit(event.target.value)} aria-label={copy.queryLimit} inputMode="numeric" className="w-full border-2 border-stone-300 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[#151515]" />
+                    </div>
+                    <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.resultHint} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                    <label className="space-y-1">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.queryFields}</span>
-                      <input
-                        value={datasetQueryFields}
-                        onChange={(event) => setDatasetQueryFields(event.target.value)}
-                        placeholder={copy.queryFieldsPlaceholder}
-                        aria-label={copy.queryFields}
-                        className="w-full border-2 border-stone-300 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[#151515]"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.queryLimit}</span>
-                      <input
-                        value={datasetQueryLimit}
-                        onChange={(event) => setDatasetQueryLimit(event.target.value)}
-                        aria-label={copy.queryLimit}
-                        inputMode="numeric"
-                        className="w-full border-2 border-stone-300 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-[#151515]"
-                      />
-                    </label>
-                  </div>
+                </Panel>
+              </section>
+              <section className="grid gap-5 lg:grid-cols-2">
+                <Panel title={copy.columns} icon={<TableProperties size={18} />} accent="#16605D"><ColumnProfile profile={profile} empty={copy.empty} copy={copy} /></Panel>
+                <Panel title={copy.statistics} icon={<FlaskConical size={18} />} accent="#B9472A"><StatisticsTable statistics={statistics} empty={copy.empty} copy={copy} /></Panel>
+              </section>
+              {profile?.warnings.length ? <Panel title={copy.warnings} icon={<Activity size={18} />} accent="#B9472A"><ul className="space-y-2 text-sm leading-6">{profile.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></Panel> : null}
+            </section>
+          )}
+
+          {activePage === 'wizard' && (
+            <DataLabAnalysisWizard language={language} copy={copy} dataset={selectedDataset} profile={profile} suggestions={suggestions} busyKind={busyKind} onRunAnalysis={runWorkerAnalysis} onRenderVisualization={renderVisualization} />
+          )}
+
+          {activePage === 'analysis' && (
+            <section className="space-y-5">
+              <section className="border-2 border-[#151515] bg-[#F9F7EF]">
+                <div className="flex items-center justify-between border-b-2 border-[#151515] px-4 py-3">
+                  <h2 className="flex items-center gap-2 font-serif text-2xl italic"><Sparkles size={18} />{copy.pipelines}</h2>
+                  <button onClick={loadAll} className="inline-flex items-center gap-2 border border-stone-400 px-3 py-2 font-mono text-[10px] uppercase hover:bg-white"><RefreshCw size={13} />{copy.refresh}</button>
                 </div>
-                <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.resultHint} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
-              </div>
-            </Panel>
-
-            <DataLabAnalysisWizard
-              language={language}
-              copy={copy}
-              dataset={selectedDataset}
-              profile={profile}
-              suggestions={suggestions}
-              busyKind={busyKind}
-              onRunAnalysis={runWorkerAnalysis}
-              onRenderVisualization={renderVisualization}
-            />
-
-            <section className="border-2 border-[#151515] bg-[#F9F7EF]">
-              <div className="flex items-center justify-between border-b-2 border-[#151515] px-4 py-3">
-                <h2 className="flex items-center gap-2 font-serif text-2xl italic"><Sparkles size={18} />{copy.pipelines}</h2>
-                <button onClick={loadAll} className="inline-flex items-center gap-2 border border-stone-400 px-3 py-2 font-mono text-[10px] uppercase hover:bg-white">
-                  <RefreshCw size={13} />{copy.refresh}
-                </button>
-              </div>
-              <div className="grid gap-0 lg:grid-cols-2">
-                {toolGroups.map((group) => (
-                  <div key={group.id} className="border-b border-r border-stone-300 p-4">
-                    <div className="mb-3 flex items-end justify-between gap-3">
-                      <div>
-                        <div className="font-mono text-[10px] uppercase tracking-[0.24em]" style={{ color: group.accent }}>{group.eyebrow}</div>
-                        <h3 className="mt-1 font-serif text-2xl">{group.title}</h3>
+                <div className="grid gap-0 lg:grid-cols-2">
+                  {toolGroups.map((group) => (
+                    <div key={group.id} className="border-b border-r border-stone-300 p-4">
+                      <div className="mb-3 flex items-end justify-between gap-3">
+                        <div><div className="font-mono text-[10px] uppercase tracking-[0.24em]" style={{ color: group.accent }}>{group.eyebrow}</div><h3 className="mt-1 font-serif text-2xl">{group.title}</h3></div>
+                        <div className="h-9 w-9 border-2 border-[#151515]" style={{ background: group.accent }} />
                       </div>
-                      <div className="h-9 w-9 border-2 border-[#151515]" style={{ background: group.accent }} />
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {group.tools.map((tool) => (
+                          <button key={tool.kind} onClick={() => runWorkerAnalysis(tool.kind)} className="group border border-stone-300 bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-[#151515] hover:shadow-[4px_4px_0_#151515]" title={tool.kind}>
+                            <div className="mb-2 flex items-center justify-between gap-2"><span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">{tool.icon}{tool.kind}</span>{busyKind === tool.kind ? <Activity size={13} className="animate-spin" /> : <Play size={13} />}</div>
+                            <div className="font-serif text-lg leading-tight">{tool.label}</div>
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-stone-600">{tool.description}</p>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {group.tools.map((tool) => (
-                        <button
-                          key={tool.kind}
-                          onClick={() => runWorkerAnalysis(tool.kind)}
-                          className="group border border-stone-300 bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-[#151515] hover:shadow-[4px_4px_0_#151515]"
-                          title={tool.kind}
-                        >
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
-                              {tool.icon}{tool.kind}
-                            </span>
-                            {busyKind === tool.kind ? <Activity size={13} className="animate-spin" /> : <Play size={13} />}
-                          </div>
-                          <div className="font-serif text-lg leading-tight">{tool.label}</div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-stone-600">{tool.description}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              </section>
+              <WorkerResultPanel workerJob={workerJob} workerPayload={workerPayload} visualizationArtifact={visualizationArtifact} datasetOperationPayload={datasetOperationPayload} datasetOperationHistory={datasetOperationHistory} copy={copy} />
             </section>
+          )}
 
-            <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_24rem]">
-              <Panel title={copy.result} icon={<Activity size={18} />} accent="#7E5130">
-                {workerJob || workerPayload || visualizationArtifact || datasetOperationPayload ? (
-                  <div className="space-y-4">
-                    {datasetOperationPayload && (
-                      <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.empty} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
-                    )}
-                    {workerJob && (
-                      <div className="grid grid-cols-3 border-2 border-[#151515] bg-white">
-                        <StatusTile label={copy.job} value={workerJob.id.slice(0, 8)} />
-                        <StatusTile label={copy.kind} value={workerJob.kind} />
-                        <StatusTile label={copy.status} value={workerJob.status} />
-                      </div>
-                    )}
-                    {workerPayload && <WorkerResultSummary payload={workerPayload} labels={{ files: copy.files, details: copy.details, lineage: copy.lineage, rawJson: copy.rawJson, svgChartPreview: copy.svgChartPreview, chartPreviewAlt: copy.chartPreviewAlt }} />}
-                    {visualizationArtifact && (
-                      <div className="border border-[#6C4AB6] bg-[#F0ECFF] p-3">
-                        <div className="grid grid-cols-3 gap-2">
-                          <MiniMetric label={copy.kind} value={visualizationArtifact.kind} />
-                          <MiniMetric label={copy.engine} value={visualizationArtifact.engine} />
-                          <MiniMetric label={copy.rows} value={visualizationArtifact.dataLineage.rowCount} />
-                        </div>
-                        <VisualizationPreview artifact={visualizationArtifact} copy={copy} />
-                        <pre className="mt-3 max-h-52 overflow-auto border border-violet-200 bg-white p-3 text-xs">
-                          {JSON.stringify(visualizationArtifact.spec, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="border border-dashed border-stone-300 bg-white/60 p-6 text-sm leading-6 text-stone-600">{copy.resultHint}</div>
-                )}
-              </Panel>
-
+          {activePage === 'visuals' && (
+            <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_25rem]">
+              <WorkerResultPanel workerJob={workerJob} workerPayload={workerPayload} visualizationArtifact={visualizationArtifact} datasetOperationPayload={datasetOperationPayload} datasetOperationHistory={datasetOperationHistory} copy={copy} />
               <Panel title={copy.chartSuggestions} icon={<LineChart size={18} />} accent="#6C4AB6">
                 <div className="space-y-2">
-                  {suggestions.length === 0 ? (
-                    <p className="text-sm text-stone-500">{copy.empty}</p>
-                  ) : suggestions.slice(0, 6).map((suggestion) => (
+                  {suggestions.length === 0 ? <p className="text-sm text-stone-500">{copy.empty}</p> : suggestions.slice(0, 8).map((suggestion) => (
                     <button key={suggestion.id} onClick={() => renderVisualization(suggestion)} className="w-full border border-stone-300 bg-white p-3 text-left hover:border-[#151515]">
                       <div className="font-mono text-[10px] uppercase text-stone-500">{suggestion.kind} / {suggestion.engine}</div>
                       <div className="mt-1 font-serif text-lg">{suggestion.title}</div>
-                      <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-stone-500">
-                        <span>{suggestion.exportFormats.join(' / ')}</span>
-                        <span className="inline-flex items-center gap-1"><Play size={12} />{copy.renderChart}</span>
-                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-stone-500"><span>{suggestion.exportFormats.join(' / ')}</span><span className="inline-flex items-center gap-1"><Play size={12} />{copy.renderChart}</span></div>
                     </button>
                   ))}
                 </div>
               </Panel>
             </section>
+          )}
 
-            <DataSourceRegistryPanel
-              dataset={activeDataSourceDataset}
-              datasets={dataSourceDatasets}
-              copy={copy}
-              materializingKey={materializingSourceKey}
-              onSelect={(dataset) => {
-                selectDatasetSummary(dataset);
-              }}
-              onMaterialize={materializeDataSource}
-              onMaterializeBatch={materializeDataSources}
-              materializeResults={materializeResults}
-            />
-
-            <section className="grid gap-5 lg:grid-cols-2">
-              <Panel title={copy.columns} icon={<TableProperties size={18} />} accent="#16605D">
-                <ColumnProfile profile={profile} empty={copy.empty} copy={copy} />
-              </Panel>
-              <Panel title={copy.statistics} icon={<FlaskConical size={18} />} accent="#B9472A">
-                <StatisticsTable statistics={statistics} empty={copy.empty} copy={copy} />
-              </Panel>
-            </section>
-          </main>
-
-          <aside className="space-y-5 min-w-0">
-            <Panel title={copy.assets} icon={<FileJson size={18} />} accent="#151515">
-              <div className="grid grid-cols-2 gap-2">
-                <MiniMetric label={copy.datasets} value={datasets.length} />
-                <MiniMetric label={copy.jobs} value={jobs.length} />
-                <MiniMetric label={copy.artifacts} value={artifacts.length} />
-                <MiniMetric label={copy.capabilities} value={capabilities.length} />
-              </div>
-            </Panel>
-
-            <Panel title={copy.apiSurface} icon={<Network size={18} />} accent="#16605D">
-              <p className="mb-3 text-xs leading-5 text-stone-600">{copy.apiSurfaceHint}</p>
-              <div className="mb-3 border border-stone-300 bg-[#FFFCF4] p-3">
-                <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.dataSourceRegistry}</div>
-                <p className="mt-1 text-xs leading-5 text-stone-600">{copy.dataSourceRegistryHint}</p>
-              </div>
-              <div className="space-y-2">
-                {apiEndpoints.map((endpoint) => (
-                  <div key={endpoint.path} className="border border-stone-300 bg-white p-3">
-                    <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{endpoint.method}</div>
-                    <div className="mt-1 break-all font-mono text-xs">{endpoint.path}</div>
-                    <div className="mt-2 text-xs leading-5 text-stone-600">{endpoint.description}</div>
+          {activePage === 'sources' && (
+            <section className="space-y-5">
+              {activeDataSourceDataset && activeDataSourceRunId && onOpenResearchRun && (
+                <div className="flex flex-col gap-3 border-2 border-[#151515] bg-[#E6F2EF] p-4 md:flex-row md:items-center md:justify-between">
+                  <div className="min-w-0">
+                    <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.linkedRun}</div>
+                    <div className="mt-1 break-all font-mono text-xs text-stone-700">{activeDataSourceRunId}</div>
                   </div>
-                ))}
-              </div>
-            </Panel>
-
-            <ListPanel title={copy.datasets} empty={copy.empty}>
-              {datasets.slice(0, 10).map((dataset) => (
-                <button
-                  key={dataset.id}
-                  onClick={() => {
-                    setSelectedDatasetId(dataset.id);
-                    setDatasetName(dataset.name);
-                    setRowsText(JSON.stringify(dataset.sampleRows, null, 2));
-                    setWorkerJob(null);
-                    setWorkerPayload(null);
-                    setVisualizationArtifact(null);
-                    clearDatasetOperationPayload();
-                  }}
-                  className={`w-full border p-3 text-left hover:border-[#151515] ${selectedDatasetId === dataset.id ? 'border-[#151515] bg-[#E6F2EF]' : 'border-stone-300 bg-white'}`}
-                >
-                  <div className="font-mono text-[10px] uppercase text-stone-500">{dataset.sourceKind} / {dataset.rowCount} x {dataset.columnCount}</div>
-                  <div className="mt-1 truncate font-serif text-lg">{dataset.name}</div>
-                  <div className="mt-1 text-xs text-stone-500">{formatDate(dataset.createdAt)}</div>
-                </button>
-              ))}
-            </ListPanel>
-
-            <ListPanel title={copy.jobs} empty={copy.empty}>
-              {jobs.slice(0, 10).map((job) => (
-                <div key={job.id} className="border border-stone-300 bg-white p-3">
-                  <div className="font-mono text-[10px] uppercase text-stone-500">{job.kind} / {job.status}</div>
-                  <div className="mt-1 font-serif text-lg">{job.id.slice(0, 8)}</div>
-                  <div className="mt-1 text-xs text-stone-500">{formatDate(job.createdAt)}</div>
-                  <div className="mt-3 border-t border-stone-200 pt-2">
-                    <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.jobActions}</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => rerunAnalysisJob(job)}
-                        disabled={busyKind === `job-rerun-${job.id}`}
-                        className="inline-flex min-h-9 items-center justify-center gap-2 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60"
-                      >
-                        {busyKind === `job-rerun-${job.id}` ? <Activity size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                        {copy.rerunJob}
-                      </button>
-                      <button
-                        onClick={() => cancelAnalysisJob(job)}
-                        disabled={busyKind === `job-cancel-${job.id}` || job.status === 'cancelled'}
-                        className="inline-flex min-h-9 items-center justify-center gap-2 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60"
-                      >
-                        {busyKind === `job-cancel-${job.id}` ? <Activity size={12} className="animate-spin" /> : <Activity size={12} />}
-                        {copy.cancelJob}
-                      </button>
-                    </div>
-                  </div>
+                  <button onClick={() => onOpenResearchRun(activeDataSourceRunId)} className="inline-flex min-h-9 items-center justify-center gap-2 border border-[#151515] bg-white px-3 py-2 font-mono text-[10px] uppercase hover:bg-[#151515] hover:text-white">
+                    <ExternalLink size={13} />{copy.openResearchRun}
+                  </button>
                 </div>
-              ))}
-            </ListPanel>
+              )}
+              <DataSourceRegistryPanel dataset={activeDataSourceDataset} datasets={dataSourceDatasets} copy={copy} materializingKey={materializingSourceKey} onSelect={(dataset) => selectDatasetSummary(dataset)} onMaterialize={materializeDataSource} onMaterializeBatch={materializeDataSources} materializeResults={materializeResults} />
+              <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.resultHint} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
+            </section>
+          )}
 
-            <ListPanel title={copy.artifacts} empty={copy.empty}>
-              {artifacts.slice(0, 10).map((artifact) => (
-                <div key={artifact.id} className="border border-stone-300 bg-white p-3">
-                  <div className="font-mono text-[10px] uppercase text-stone-500">{artifact.artifactType}</div>
-                  <div className="mt-1 truncate font-serif text-lg">{artifact.title}</div>
-                  <div className="mt-1 text-xs text-stone-500">{formatDate(artifact.createdAt)}</div>
-                  {artifactExportFormats(artifact).length > 0 && (
-                    <div className="mt-3 border-t border-stone-200 pt-2">
-                      <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.exportArtifact}</div>
-                      <div className="flex flex-wrap gap-2">
-                        {artifactExportFormats(artifact).map((format) => (
-                          <button
-                            key={`${artifact.id}-${format}`}
-                            onClick={() => exportAnalyticsArtifact(artifact, format)}
-                            disabled={busyKind === `artifact-export-${artifact.id}-${format}`}
-                            className="inline-flex min-h-8 items-center gap-1 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60"
-                          >
-                            {busyKind === `artifact-export-${artifact.id}-${format}` ? <Activity size={11} className="animate-spin" /> : <Download size={11} />}
-                            {format}
-                          </button>
-                        ))}
+          {activePage === 'activity' && (
+            <section className="space-y-5">
+              <div className="grid gap-5 xl:grid-cols-3">
+                <ListPanel title={copy.datasets} empty={copy.empty}>
+                  {datasets.slice(0, 20).map((dataset) => (
+                    <button key={dataset.id} onClick={() => { selectDatasetSummary(dataset); setActivePage('dataset'); }} className={`w-full border p-3 text-left hover:border-[#151515] ${selectedDatasetId === dataset.id ? 'border-[#151515] bg-[#E6F2EF]' : 'border-stone-300 bg-white'}`}>
+                      <div className="font-mono text-[10px] uppercase text-stone-500">{dataset.sourceKind} / {dataset.rowCount} x {dataset.columnCount}</div>
+                      <div className="mt-1 truncate font-serif text-lg">{dataset.name}</div>
+                      <div className="mt-1 text-xs text-stone-500">{formatDate(dataset.createdAt)}</div>
+                    </button>
+                  ))}
+                </ListPanel>
+                <ListPanel title={copy.jobs} empty={copy.empty}>
+                  {jobs.slice(0, 20).map((job) => (
+                    <div key={job.id} className="border border-stone-300 bg-white p-3">
+                      <div className="font-mono text-[10px] uppercase text-stone-500">{job.kind} / {job.status}</div>
+                      <div className="mt-1 font-serif text-lg">{job.id.slice(0, 8)}</div>
+                      <div className="mt-1 text-xs text-stone-500">{formatDate(job.createdAt)}</div>
+                      <div className="mt-3 border-t border-stone-200 pt-2">
+                        <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.jobActions}</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button onClick={() => rerunAnalysisJob(job)} disabled={busyKind === `job-rerun-${job.id}`} className="inline-flex min-h-9 items-center justify-center gap-2 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60">{busyKind === `job-rerun-${job.id}` ? <Activity size={12} className="animate-spin" /> : <RefreshCw size={12} />}{copy.rerunJob}</button>
+                          <button onClick={() => cancelAnalysisJob(job)} disabled={busyKind === `job-cancel-${job.id}` || job.status === 'cancelled'} className="inline-flex min-h-9 items-center justify-center gap-2 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60">{busyKind === `job-cancel-${job.id}` ? <Activity size={12} className="animate-spin" /> : <Activity size={12} />}{copy.cancelJob}</button>
+                        </div>
                       </div>
                     </div>
-                  )}
-                </div>
-              ))}
-            </ListPanel>
+                  ))}
+                </ListPanel>
+                <ListPanel title={copy.artifacts} empty={copy.empty}>
+                  {artifacts.slice(0, 20).map((artifact) => (
+                    <div key={artifact.id} className="border border-stone-300 bg-white p-3">
+                      <div className="font-mono text-[10px] uppercase text-stone-500">{artifact.artifactType}</div>
+                      <div className="mt-1 truncate font-serif text-lg">{artifact.title}</div>
+                      <div className="mt-1 text-xs text-stone-500">{formatDate(artifact.createdAt)}</div>
+                      {artifactExportFormats(artifact).length > 0 && <div className="mt-3 border-t border-stone-200 pt-2"><div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.exportArtifact}</div><div className="flex flex-wrap gap-2">{artifactExportFormats(artifact).map((format) => <button key={`${artifact.id}-${format}`} onClick={() => exportAnalyticsArtifact(artifact, format)} disabled={busyKind === `artifact-export-${artifact.id}-${format}`} className="inline-flex min-h-8 items-center gap-1 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60">{busyKind === `artifact-export-${artifact.id}-${format}` ? <Activity size={11} className="animate-spin" /> : <Download size={11} />}{format}</button>)}</div></div>}
+                    </div>
+                  ))}
+                </ListPanel>
+              </div>
+              <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.resultHint} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
+            </section>
+          )}
 
-            <ListPanel title={copy.capabilities} empty={copy.empty}>
-              {capabilities.map((capability) => (
-                <div key={capability.id} className="border border-stone-300 bg-white p-3">
-                  <div className="font-mono text-[10px] uppercase text-stone-500">{capability.kind} / {capability.status}</div>
-                  <div className="mt-1 font-serif text-lg">{capability.title}</div>
-                  <p className="mt-1 text-xs leading-5 text-stone-600">{capability.description}</p>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {capability.engines.slice(0, 5).map((engine) => (
-                      <span key={engine} className="border border-stone-300 px-2 py-1 font-mono text-[10px]">
-                        {engine}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </ListPanel>
-
-            {profile?.warnings.length ? (
-              <Panel title={copy.warnings} icon={<Activity size={18} />} accent="#B9472A">
-                <ul className="space-y-2 text-sm leading-6">
-                  {profile.warnings.map((warning) => <li key={warning}>{warning}</li>)}
-                </ul>
+          {activePage === 'system' && (
+            <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_26rem]">
+              <Panel title={copy.apiSurface} icon={<Network size={18} />} accent="#16605D">
+                <p className="mb-3 text-xs leading-5 text-stone-600">{copy.apiSurfaceHint}</p>
+                <div className="space-y-2">{apiEndpoints.map((endpoint) => <div key={endpoint.path} className="border border-stone-300 bg-white p-3"><div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{endpoint.method}</div><div className="mt-1 break-all font-mono text-xs">{endpoint.path}</div><div className="mt-2 text-xs leading-5 text-stone-600">{endpoint.description}</div></div>)}</div>
               </Panel>
-            ) : null}
-          </aside>
-        </div>
+              <ListPanel title={copy.capabilities} empty={copy.empty}>
+                {capabilities.map((capability) => <div key={capability.id} className="border border-stone-300 bg-white p-3"><div className="font-mono text-[10px] uppercase text-stone-500">{capability.kind} / {capability.status}</div><div className="mt-1 font-serif text-lg">{capability.title}</div><p className="mt-1 text-xs leading-5 text-stone-600">{capability.description}</p><div className="mt-2 flex flex-wrap gap-1">{capability.engines.slice(0, 5).map((engine) => <span key={engine} className="border border-stone-300 px-2 py-1 font-mono text-[10px]">{engine}</span>)}</div></div>)}
+              </ListPanel>
+            </section>
+          )}
+        </main>
       </div>
     </div>
   );
@@ -1857,6 +1737,81 @@ const MiniMetric: React.FC<{ label: string; value: string | number }> = ({ label
     <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{label}</div>
     <div className="mt-1 truncate font-serif text-xl">{value}</div>
   </div>
+);
+
+const EmptyBlock: React.FC<{ text: string }> = ({ text }) => (
+  <div className="flex min-h-52 items-center justify-center border border-dashed border-stone-300 bg-white/60 p-6 text-center text-sm text-stone-500">
+    {text}
+  </div>
+);
+
+const DatasetSummaryBlock: React.FC<{
+  dataset: AnalyticsDatasetSummary;
+  profile: DatasetProfileSummary | null;
+  copy: typeof text.zh | typeof text.en;
+}> = ({ dataset, profile, copy }) => (
+  <div className="space-y-4">
+    <div>
+      <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{dataset.sourceKind}</div>
+      <div className="mt-1 font-serif text-3xl leading-tight">{dataset.name}</div>
+      <div className="mt-2 break-all font-mono text-[10px] text-stone-500">{dataset.id}</div>
+    </div>
+    <div className="grid grid-cols-4 border-2 border-[#151515] bg-white">
+      <StatusTile label={copy.rows} value={dataset.rowCount} />
+      <StatusTile label={copy.cols} value={dataset.columnCount} />
+      <StatusTile label={copy.preview} value={dataset.sampleRows?.length ?? 0} />
+      <StatusTile label={copy.quality} value={profile ? `${Math.round(profile.qualityScore * 100)}%` : '-'} />
+    </div>
+    <div className="grid gap-2 sm:grid-cols-2">
+      <MiniMetric label={copy.storage} value={String(dataset.metadata?.storage && typeof dataset.metadata.storage === 'object' ? (dataset.metadata.storage as Record<string, unknown>).rowStorage ?? 'postgres' : 'postgres')} />
+      <MiniMetric label={copy.sampleLimit} value={String(dataset.metadata?.storage && typeof dataset.metadata.storage === 'object' ? (dataset.metadata.storage as Record<string, unknown>).sampleRowLimit ?? dataset.sampleRows?.length ?? 0 : dataset.sampleRows?.length ?? 0)} />
+    </div>
+    <div className="max-h-40 overflow-auto border border-stone-300 bg-[#FFFCF4] p-2 font-mono text-[10px]">
+      {JSON.stringify(dataset.metadata ?? {}, null, 2)}
+    </div>
+  </div>
+);
+
+const WorkerResultPanel: React.FC<{
+  workerJob: AnalyticsJobSummary | null;
+  workerPayload: Record<string, unknown> | null;
+  visualizationArtifact: VisualizationArtifactSummary | null;
+  datasetOperationPayload: Record<string, unknown> | null;
+  datasetOperationHistory: Array<Record<string, unknown>>;
+  copy: typeof text.zh | typeof text.en;
+}> = ({ workerJob, workerPayload, visualizationArtifact, datasetOperationPayload, datasetOperationHistory, copy }) => (
+  <Panel title={copy.result} icon={<Activity size={18} />} accent="#7E5130">
+    {workerJob || workerPayload || visualizationArtifact || datasetOperationPayload ? (
+      <div className="space-y-4">
+        {datasetOperationPayload && (
+          <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.empty} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
+        )}
+        {workerJob && (
+          <div className="grid grid-cols-3 border-2 border-[#151515] bg-white">
+            <StatusTile label={copy.job} value={workerJob.id.slice(0, 8)} />
+            <StatusTile label={copy.kind} value={workerJob.kind} />
+            <StatusTile label={copy.status} value={workerJob.status} />
+          </div>
+        )}
+        {workerPayload && <WorkerResultSummary payload={workerPayload} labels={{ files: copy.files, details: copy.details, lineage: copy.lineage, rawJson: copy.rawJson, svgChartPreview: copy.svgChartPreview, chartPreviewAlt: copy.chartPreviewAlt }} />}
+        {visualizationArtifact && (
+          <div className="border border-[#6C4AB6] bg-[#F0ECFF] p-3">
+            <div className="grid grid-cols-3 gap-2">
+              <MiniMetric label={copy.kind} value={visualizationArtifact.kind} />
+              <MiniMetric label={copy.engine} value={visualizationArtifact.engine} />
+              <MiniMetric label={copy.rows} value={visualizationArtifact.dataLineage.rowCount} />
+            </div>
+            <VisualizationPreview artifact={visualizationArtifact} copy={copy} />
+            <pre className="mt-3 max-h-52 overflow-auto border border-violet-200 bg-white p-3 text-xs">
+              {JSON.stringify(visualizationArtifact.spec, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    ) : (
+      <div className="border border-dashed border-stone-300 bg-white/60 p-6 text-sm leading-6 text-stone-600">{copy.resultHint}</div>
+    )}
+  </Panel>
 );
 
 const ActionButton: React.FC<{ active?: boolean; onClick: () => void; icon: React.ReactNode; label: string; tone?: 'dark' | 'light' }> = ({ active, onClick, icon, label, tone = 'light' }) => (

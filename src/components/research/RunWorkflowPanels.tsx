@@ -1,5 +1,5 @@
-import React from 'react';
-import { Plus, RotateCcw, Search } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { Check, CircleDot, Clock3, Plus, RotateCcw, Search, TriangleAlert } from 'lucide-react';
 import {
   DocumentSearchResultSummary,
   PlannedQuerySummary,
@@ -16,9 +16,9 @@ import {
   MiniMetric,
   Panel,
   RUN_STAGES,
+  isTerminalRun,
   safeDomain,
   stripHeadlineTags,
-  isStageActive,
   ResearchPanelCopy,
 } from './shared';
 
@@ -27,30 +27,221 @@ export const RunTimeline: React.FC<{
   events: ResearchRunEvent[];
   language: Language;
   t: Translator;
-}> = ({ run, events, language, t }) => (
-  <Panel title={t('research.timeline')}>
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-      {RUN_STAGES.map((stage) => (
-        <div key={stage} className={`border px-3 py-2 ${isStageActive(run, stage) ? 'border-stone-900 bg-white' : 'border-stone-300 bg-stone-100'}`}>
-          <div className="font-mono text-[10px] uppercase opacity-50">{labelForStatus(stage, language)}</div>
-          <div className="h-1 bg-stone-300 mt-2">
-            <div className={`h-full ${isStageActive(run, stage) ? 'bg-emerald-700' : 'bg-transparent'}`} />
+}> = ({ run, events, language, t }) => {
+  const stageRows = useMemo(() => buildTimelineStages(run, events, language), [run, events, language]);
+  const activeIndex = stageRows.findIndex((stage) => stage.state === 'active');
+  const completedCount = stageRows.filter((stage) => stage.state === 'done').length;
+  const failedEvent = [...events].reverse().find((event) => event.level === 'error');
+  const latestEvent = events.at(-1);
+  const headline = run
+    ? stageRows.find((stage) => stage.state === 'active')?.message
+      || latestEvent?.message
+      || (language === 'zh' ? '等待下一条 run 事件。' : 'Waiting for the next run event.')
+    : (language === 'zh' ? '还没有选中 run。' : 'No run selected yet.');
+
+  return (
+    <Panel title={t('research.timeline')}>
+      <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem]">
+        <div className="border border-stone-900 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[10px] uppercase text-stone-500">{language === 'zh' ? '当前流水线' : 'Current pipeline'}</div>
+              <div className="mt-1 text-sm leading-5">{headline}</div>
+            </div>
+            <div className="shrink-0 border border-stone-300 bg-stone-100 px-3 py-2 text-right">
+              <div className="font-mono text-[9px] uppercase text-stone-500">{language === 'zh' ? '阶段进度' : 'Stage progress'}</div>
+              <div className="font-mono text-sm">{completedCount}/{RUN_STAGES.length}</div>
+            </div>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden bg-stone-200">
+            <div
+              className={`h-full ${run?.status === 'failed' ? 'bg-rose-700' : run?.status === 'cancelled' ? 'bg-amber-700' : 'bg-emerald-700'}`}
+              style={{ width: `${Math.round((Math.max(0, activeIndex) + (isTerminalRun(run?.status ?? '') ? 1 : 0)) / RUN_STAGES.length * 100)}%` }}
+            />
           </div>
         </div>
-      ))}
-    </div>
-    <div className="space-y-2 max-h-44 overflow-y-auto">
-      {events.length === 0 ? (
-        <p className="font-mono text-xs opacity-60">{t('research.noEvents')}</p>
-      ) : events.slice(-12).reverse().map((event) => (
-        <div key={event.id} className="border-b border-stone-300 pb-2 last:border-b-0">
-          <div className="font-mono text-[10px] uppercase opacity-50">{formatDate(event.createdAt)} / {labelForStatus(event.stage, language)}</div>
-          <div className="text-sm leading-snug">{event.message}</div>
+        <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
+          <MiniMetric label={language === 'zh' ? '当前阶段' : 'Stage'} value={run ? labelForStatus(run.stage, language) : '-'} />
+          <MiniMetric label={language === 'zh' ? '事件数' : 'Events'} value={events.length} />
+          <MiniMetric label={language === 'zh' ? '错误' : 'Errors'} value={events.filter((event) => event.level === 'error').length} />
         </div>
-      ))}
+      </div>
+
+      <div className="relative mb-5 overflow-x-auto pb-2">
+        <div className="absolute left-4 right-4 top-6 hidden h-0.5 bg-stone-300 md:block" />
+        <div className="grid min-w-[58rem] grid-cols-8 gap-2">
+          {stageRows.map((stage, index) => (
+            <TimelineStageCard key={stage.stage} stage={stage} index={index} language={language} />
+          ))}
+        </div>
+      </div>
+
+      {failedEvent && (
+        <div className="mb-4 border border-rose-300 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-900">
+          <div className="font-mono text-[10px] uppercase opacity-70">{language === 'zh' ? '最近错误' : 'Latest error'} / {labelForStatus(failedEvent.stage, language)} / {formatDate(failedEvent.createdAt)}</div>
+          <div className="mt-1">{failedEvent.message}</div>
+        </div>
+      )}
+
+      <div className="grid gap-3 lg:grid-cols-[11rem_minmax(0,1fr)]">
+        <div className="border border-stone-300 bg-white p-3">
+          <div className="font-mono text-[10px] uppercase text-stone-500">{language === 'zh' ? '事件流' : 'Event stream'}</div>
+          <p className="mt-2 text-xs leading-5 text-stone-600">
+            {language === 'zh'
+              ? '按时间展示真实 run_events；不是静态步骤图。'
+              : 'Chronological run_events, not a static step diagram.'}
+          </p>
+        </div>
+        <div className="max-h-56 space-y-2 overflow-y-auto">
+          {events.length === 0 ? (
+            <p className="border border-dashed border-stone-300 bg-white/60 p-3 font-mono text-xs opacity-60">{t('research.noEvents')}</p>
+          ) : events.slice(-14).reverse().map((event) => (
+            <div key={event.id} className={`border bg-white p-3 ${event.level === 'error' ? 'border-rose-300' : event.level === 'warn' ? 'border-amber-300' : 'border-stone-300'}`}>
+              <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase opacity-60">
+                <span>{formatDate(event.createdAt)}</span>
+                <span>/</span>
+                <span>{labelForStatus(event.stage, language)}</span>
+                <span>/</span>
+                <span>{event.level}</span>
+              </div>
+              <div className="mt-1 text-sm leading-snug">{event.message}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+};
+
+type TimelineStageState = 'done' | 'active' | 'waiting' | 'failed' | 'cancelled';
+
+interface TimelineStageRow {
+  stage: ResearchRunSummary['stage'];
+  state: TimelineStageState;
+  label: string;
+  message: string;
+  eventCount: number;
+  latestEvent?: ResearchRunEvent;
+}
+
+function buildTimelineStages(
+  run: ResearchRunSummary | null,
+  events: ResearchRunEvent[],
+  language: Language,
+): TimelineStageRow[] {
+  const currentIndex = run ? RUN_STAGES.indexOf(run.stage) : -1;
+  const terminalIndex = run && isTerminalRun(run.status) ? RUN_STAGES.length - 1 : currentIndex;
+
+  return RUN_STAGES.map((stage, index) => {
+    const stageEvents = events.filter((event) => event.stage === stage);
+    const latestEvent = stageEvents.at(-1);
+    const hasError = stageEvents.some((event) => event.level === 'error');
+    let state: TimelineStageState = 'waiting';
+
+    if (run?.status === 'cancelled' && index === currentIndex) {
+      state = 'cancelled';
+    } else if ((run?.status === 'failed' && index === currentIndex) || hasError) {
+      state = 'failed';
+    } else if (index < currentIndex || (run?.status === 'completed' && index <= terminalIndex)) {
+      state = 'done';
+    } else if (index === currentIndex) {
+      state = 'active';
+    }
+
+    return {
+      stage,
+      state,
+      label: labelForStatus(stage, language),
+      message: latestEvent?.message ?? defaultStageMessage(stage, state, language),
+      eventCount: stageEvents.length,
+      latestEvent,
+    };
+  });
+}
+
+function defaultStageMessage(stage: ResearchRunSummary['stage'], state: TimelineStageState, language: Language) {
+  if (state === 'waiting') return language === 'zh' ? '等待前置阶段完成。' : 'Waiting for prior stages.';
+  const zh: Record<string, string> = {
+    planning: '拆解研究主题、子问题和检索式。',
+    discovery: '调用搜索和数据 provider 发现候选来源。',
+    frontier: '按优先级整理待抓取 URL。',
+    fetching: '抓取网页、文档和结构化数据。',
+    extracting: '抽取正文、链接、表格和元数据。',
+    analyzing: '抽取 claim、evidence 和冲突关系。',
+    reporting: '生成中文摘要、证据表和报告。',
+    completed: '研究 run 已完成。',
+  };
+  const en: Record<string, string> = {
+    planning: 'Break topic into questions and queries.',
+    discovery: 'Call search and data providers.',
+    frontier: 'Prioritize URLs for crawling.',
+    fetching: 'Fetch pages, documents, and data.',
+    extracting: 'Extract text, links, tables, and metadata.',
+    analyzing: 'Extract claims, evidence, and conflicts.',
+    reporting: 'Generate Chinese summary and report.',
+    completed: 'Research run completed.',
+  };
+  return (language === 'zh' ? zh : en)[stage] ?? stage;
+}
+
+const TimelineStageCard: React.FC<{
+  stage: TimelineStageRow;
+  index: number;
+  language: Language;
+}> = ({ stage, index, language }) => {
+  const style = {
+    done: {
+      card: 'border-emerald-300 bg-emerald-50',
+      dot: 'border-emerald-700 bg-emerald-700 text-white',
+      bar: 'bg-emerald-700',
+      icon: <Check size={13} />,
+    },
+    active: {
+      card: 'border-stone-900 bg-white shadow-[0_0_0_1px_#141414]',
+      dot: 'border-stone-900 bg-stone-900 text-white',
+      bar: 'bg-stone-900',
+      icon: <CircleDot size={13} />,
+    },
+    waiting: {
+      card: 'border-stone-300 bg-stone-100 text-stone-500',
+      dot: 'border-stone-300 bg-stone-100 text-stone-500',
+      bar: 'bg-stone-300',
+      icon: <Clock3 size={13} />,
+    },
+    failed: {
+      card: 'border-rose-300 bg-rose-50 text-rose-950',
+      dot: 'border-rose-700 bg-rose-700 text-white',
+      bar: 'bg-rose-700',
+      icon: <TriangleAlert size={13} />,
+    },
+    cancelled: {
+      card: 'border-amber-300 bg-amber-50 text-amber-950',
+      dot: 'border-amber-700 bg-amber-700 text-white',
+      bar: 'bg-amber-700',
+      icon: <TriangleAlert size={13} />,
+    },
+  }[stage.state];
+
+  return (
+    <div className={`relative border p-3 ${style.card}`}>
+      <div className={`relative z-10 mb-3 flex h-7 w-7 items-center justify-center rounded-full border ${style.dot}`}>
+        {style.icon}
+      </div>
+      <div className="font-mono text-[9px] uppercase opacity-60">
+        {String(index + 1).padStart(2, '0')} / {stage.state}
+      </div>
+      <div className="mt-1 font-serif text-lg leading-tight">{stage.label}</div>
+      <div className="mt-2 h-1.5 overflow-hidden bg-white/70">
+        <div className={`h-full ${style.bar}`} style={{ width: stage.state === 'waiting' ? '0%' : '100%' }} />
+      </div>
+      <p className="mt-2 line-clamp-3 min-h-12 text-xs leading-4">{stage.message}</p>
+      <div className="mt-3 flex items-center justify-between gap-2 font-mono text-[9px] uppercase opacity-60">
+        <span>{language === 'zh' ? '事件' : 'Events'} {stage.eventCount}</span>
+        <span>{stage.latestEvent?.createdAt ? formatDate(stage.latestEvent.createdAt) : '-'}</span>
+      </div>
     </div>
-  </Panel>
-);
+  );
+};
 
 export const ManualRunControls: React.FC<{
   run: ResearchRunSummary | null;
@@ -115,6 +306,7 @@ export const RunDocumentSearchPanel: React.FC<{
 }> = ({ run, query, results, busy, onQueryChange, onSearch, onSelectDocument, copy, language }) => (
   <Panel title={copy.documentSearch}>
     <p className="mb-3 text-sm leading-6 opacity-70">{copy.documentSearchHint}</p>
+    <p className="mb-3 border border-stone-300 bg-white/70 px-3 py-2 text-xs leading-5 text-stone-600">{copy.documentCountHint}</p>
     <div className="flex flex-col gap-2 sm:flex-row">
       <input
         value={query}
@@ -138,7 +330,7 @@ export const RunDocumentSearchPanel: React.FC<{
 
     <div className="mt-3 space-y-2">
       {results.length === 0 ? (
-        <p className="border border-dashed border-stone-300 bg-white/60 p-3 font-mono text-xs opacity-60">{copy.noSearchResults}</p>
+        <p className="border border-dashed border-stone-300 bg-white/60 p-3 text-xs leading-5 opacity-70">{copy.noSearchResults} {copy.documentCountHint}</p>
       ) : results.slice(0, 8).map((result) => (
         <button
           key={`${result.documentId}-${result.url}`}
@@ -153,6 +345,13 @@ export const RunDocumentSearchPanel: React.FC<{
             <span className="shrink-0 font-mono text-[10px] opacity-50">
               {copy.searchRank}: {formatScore(result.rank)}
             </span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase text-stone-500">
+            {result.status ? <span>{copy.status}: {labelForStatus(result.status, language)}</span> : null}
+            <span>{language === 'zh' ? '域名' : 'Domain'}: {result.domain || safeDomain(result.url)}</span>
+            {typeof result.matchCount === 'number' ? (
+              <span>{language === 'zh' ? '命中词' : 'Matches'}: {result.matchCount}</span>
+            ) : null}
           </div>
           <div className="mt-2 text-xs leading-5 line-clamp-3">{stripHeadlineTags(result.snippet)}</div>
         </button>
@@ -209,6 +408,9 @@ export const NewsAnalysisPanel: React.FC<{
         <p className="mt-4 border border-dashed border-stone-300 bg-white/60 p-3 font-mono text-xs opacity-60">{copy.noNewsAnalysis}</p>
       ) : (
         <div className="mt-4 grid gap-3">
+          {result.documentCount === 0 && (
+            <p className="border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900">{copy.newsAnalysisEmptyReason}</p>
+          )}
           {result.clusters.length > 0 && (
             <div>
               <div className="mb-2 font-mono text-[10px] uppercase opacity-50">{copy.newsCluster}</div>
@@ -325,10 +527,13 @@ export const QueryPlanPanel: React.FC<{
         <div className="mb-4 border border-stone-300 bg-white p-3">
           <div className="font-mono text-[10px] uppercase opacity-50 mb-2">{copy.subQuestions}</div>
           <ul className="space-y-1">
-            {plan.subQuestions.slice(0, 6).map((question) => (
+            {plan.subQuestions.slice(0, 18).map((question) => (
               <li key={question} className="text-xs leading-5 border-l-2 border-stone-400 pl-2">{question}</li>
             ))}
           </ul>
+          {plan.subQuestions.length > 18 ? (
+            <div className="mt-2 font-mono text-[10px] uppercase opacity-50">+{plan.subQuestions.length - 18}</div>
+          ) : null}
         </div>
       ) : null}
 

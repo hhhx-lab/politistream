@@ -102,6 +102,20 @@ export function summarizeFrontier(frontier: FrontierItemSummary[]) {
   }, {});
 }
 
+export function summarizeDocuments(documents: ResearchDocumentSummary[]) {
+  return documents.reduce<Record<string, number>>(
+    (acc, document) => {
+      acc.total += 1;
+      acc[document.status] = (acc[document.status] ?? 0) + 1;
+      if (document.status === 'fetched') acc.fetched += 1;
+      if (document.status === 'failed') acc.failed += 1;
+      if (document.memoryStatus === 'reused') acc.reused += 1;
+      return acc;
+    },
+    { total: 0, fetched: 0, failed: 0, reused: 0 },
+  );
+}
+
 export function summarizeClaimsForPanel(claims: EvidenceClaimSummary[]) {
   return claims.reduce<Record<string, number>>((acc, claim) => {
     acc[claim.status] = (acc[claim.status] ?? 0) + 1;
