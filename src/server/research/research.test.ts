@@ -5,7 +5,7 @@ import path from "path";
 import { normalizeRSSSourceUrl } from "../db";
 import { getResearchConfigStatus, resolveAiModel, resolveAiProvider } from "./config";
 import { normalizeResearchBudget, createRunBudgetState, canAcceptUrlForRun, recordAcceptedUrl } from "./budget";
-import { createDefaultDiscoveryProviders, normalizeDiscoveredCandidate } from "./discovery/registry";
+import { createCommonCrawlDiscoveryProvider, createDefaultDiscoveryProviders, createGdeltDiscoveryProvider, createRSSDiscoveryProvider, normalizeDiscoveredCandidate } from "./discovery/registry";
 import { runEnhancedFetchSmoke } from "./evaluation/enhancedFetchSmoke";
 import { buildEvidenceClaim, createSourceProfile } from "./evidence/graph";
 import { routeExtractorForUrl } from "./extractors/router";
@@ -17,6 +17,7 @@ import { runResearchSampleAcceptance } from "./evaluation/sampleAcceptance";
 import { getLatestSmokeEvidence, persistSmokeEvidence, runDataSourceLiveSmoke, runPressureSmoke, runProviderLiveSmoke } from "./evaluation/smoke";
 import { generateMarkdownReport } from "./reports";
 import { normalizeBraveResults, normalizeNewsApiResults, normalizeSerpApiResults, normalizeTavilyResults } from "./searchProviders";
+import type { SourceType } from "./types";
 import { canonicalizeUrl } from "./url";
 import { getResearchQueueNames } from "./workers/queues";
 
@@ -34,6 +35,19 @@ function testBudgetLimits() {
   recordAcceptedUrl(state, "https://example.com/a");
   assert.equal(canAcceptUrlForRun(state, "https://example.com/b", 1), false);
   assert.equal(canAcceptUrlForRun(state, "https://other.com/a", 2), false);
+}
+
+function testBudgetNormalizerAcceptsUiStyleFields() {
+  const budget = normalizeResearchBudget({
+    mode: "quick",
+    maxUrls: 5,
+    maxDomains: 3,
+  });
+
+  assert.equal(budget.maxDepth, 1);
+  assert.equal(budget.maxUrlsPerRun, 5);
+  assert.equal(budget.maxDomainsPerRun, 3);
+  assert.equal(budget.runIntervalMinutes, 60);
 }
 
 function testProviderNormalization() {
@@ -72,6 +86,27 @@ function testDiscoveryCandidateNormalization() {
   assert.equal(candidate.sourceType, "github");
   assert.equal(candidate.provider, "github");
   assert.equal(candidate.depth, 0);
+}
+
+async function testDiscoveryProvidersRespectTopicIntent() {
+  const input = {
+    jobId: "job-1",
+    runId: "run-1",
+    topic: "好用的文档转换工具",
+    query: {
+      id: "q-1",
+      text: "好用的文档转换工具",
+      purpose: "technical-detail" as const,
+      sourceTypes: ["official", "github", "package-registry", "benchmark", "community"] as SourceType[],
+      language: "zh",
+      priority: 1,
+    },
+    seedUrls: ["https://pandoc.org/", "https://github.com/jgm/pandoc"],
+  };
+
+  assert.deepEqual(await createRSSDiscoveryProvider().discover(input), []);
+  assert.deepEqual(await createGdeltDiscoveryProvider().discover(input), []);
+  assert.deepEqual(await createCommonCrawlDiscoveryProvider().discover(input), []);
 }
 
 function testAiProviderRouting() {
@@ -161,6 +196,68 @@ function testFrontierPriorityScoring() {
   ]) {
     assert.ok(value >= 0 && value <= 1, "frontier score components must stay normalized");
   }
+
+  const topic = "文档转换工具 Pandoc Markdown DOCX PDF";
+  const officialSeed = scoreFrontierItem({
+    url: "https://pandoc.org/",
+    provider: "official",
+    sourceType: "official",
+    title: "Pandoc",
+    snippet: "Official Pandoc website for document conversion",
+    query: "文档转换工具",
+    topic,
+    depth: 0,
+    discoveredDomainCount: 1,
+  });
+  const github = scoreFrontierItem({
+    url: "https://github.com/jgm/pandoc",
+    provider: "github",
+    sourceType: "github",
+    title: "Pandoc",
+    snippet: "Universal document converter",
+    query: "文档转换工具",
+    topic,
+    depth: 0,
+    discoveredDomainCount: 1,
+  });
+  const packageRegistry = scoreFrontierItem({
+    url: "https://pypi.org/project/pypandoc/",
+    provider: "pypi",
+    sourceType: "package-registry",
+    title: "pypandoc",
+    snippet: "Python wrapper for pandoc",
+    query: "文档转换工具",
+    topic,
+    depth: 0,
+    discoveredDomainCount: 1,
+  });
+  const rss = scoreFrontierItem({
+    url: "https://example.com/feed.xml",
+    provider: "rss",
+    sourceType: "rss",
+    title: "Tech News",
+    snippet: "Latest headlines",
+    query: "文档转换工具",
+    topic,
+    depth: 1,
+    discoveredDomainCount: 4,
+  });
+  const archive = scoreFrontierItem({
+    url: "https://web.archive.org/cdx?url=pandoc.org*&output=json",
+    provider: "wayback",
+    sourceType: "archive",
+    title: "Wayback snapshots",
+    snippet: "Historical archive",
+    query: "文档转换工具",
+    topic,
+    depth: 2,
+    discoveredDomainCount: 6,
+  });
+
+  assert.ok(officialSeed > github, "official seed sources should stay above GitHub");
+  assert.ok(github > packageRegistry, "GitHub should stay ahead of package registries for document tools");
+  assert.ok(packageRegistry > rss, "package registry should outrank unrelated RSS feeds");
+  assert.ok(packageRegistry > archive, "package registry should outrank unrelated archive doorway results");
 }
 
 function testExtractorRoutingAndTableExtraction() {
@@ -818,6 +915,14 @@ function testResearchCapabilityAuditApiAndUiAreWired() {
   assert.ok(smokeSource.includes("能力目标 / Deep"), "UI smoke should assert Deep pressure visibility as a capability target");
 }
 
+function testAnalysisReportOnlyHandoffStaysSideEffectFree() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('if (decision === "report_only") return "research-report";'), "report-only handoff should route back to the Research report");
+  assert.ok(routesSource.includes('if (decision === "report_only") return [];'), "report-only handoff should not allow downstream analysis operations");
+  assert.ok(routesSource.includes('message: "已记录 Research 到 Data Lab 的分析交接决策。"'), "handoff route should persist the report-only decision as a run event");
+}
+
 async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
   const result = await runProviderLiveSmoke({
     topic: "document conversion tools",
@@ -1014,8 +1119,10 @@ async function testSmokeEvidencePersistsLatestResult() {
 
 testUrlCanonicalization();
 testBudgetLimits();
+testBudgetNormalizerAcceptsUiStyleFields();
 testProviderNormalization();
 testDiscoveryCandidateNormalization();
+await testDiscoveryProvidersRespectTopicIntent();
 testAiProviderRouting();
 testKaggleApiTokenEnablesDataProvider();
 testFrontierPriorityScoring();
@@ -1052,6 +1159,7 @@ testProviderPanelShowsDataSourceCoverage();
 testFrontierScoreExplainabilityIsPersistedAndVisible();
 testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets();
 testResearchCapabilityAuditApiAndUiAreWired();
+testAnalysisReportOnlyHandoffStaysSideEffectFree();
 await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();
 testPressureSmokeExposesStandardAndDeepBudgets();
 await testDataSourceLiveSmokeUsesPublicDiscoveryProviders();
