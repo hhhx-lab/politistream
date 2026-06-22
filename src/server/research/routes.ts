@@ -7,11 +7,13 @@ import { runResearchSampleAcceptance, type ResearchSampleAcceptanceKind } from "
 import { getLatestSmokeEvidence, persistSmokeEvidence, runDataSourceLiveSmoke, runPressureSmoke, runProviderLiveSmoke } from "./evaluation/smoke";
 import { summarizeEvidenceGraph } from "./evidence/graph";
 import { sendResearchConfigStatus, sendResearchError } from "./http";
+import { buildAnalysisOpportunity } from "./analysisOpportunity";
 import {
   addRunEvent,
   appendPlannedQueryForRun,
   createResearchJob,
   createResearchRun,
+  getAnalysisOpportunityForRun,
   getLatestResearchReportForRun,
   getLatestResearchReport,
   getLatestResearchPlanForRun,
@@ -33,7 +35,9 @@ import {
   listResearchJobs,
   listResearchRunsForJob,
   listRunEvents,
+  listSearchCandidatesForRun,
   listSourceProfiles,
+  upsertAnalysisOpportunity,
   resetFailedFrontierItemsForRun,
   searchCrawlDocumentsForRun,
   updateResearchJobStatus,
@@ -224,6 +228,68 @@ export function createResearchRouter() {
       const job = await getResearchJob(run.jobId);
       const report = await getLatestResearchReportForRun(run.id);
       res.json({ run, job, report });
+    } catch (error) {
+      sendResearchError(res, error);
+    }
+  });
+
+  router.get("/runs/:runId/analysis-opportunity", async (req, res) => {
+    try {
+      await initResearchSchema();
+      const run = await getResearchRun(req.params.runId);
+      if (!run) return res.status(404).json({ error: "research_run_not_found" });
+      const opportunity = await getAnalysisOpportunityForRun(run.id);
+      if (!opportunity) {
+        return res.status(404).json({
+          error: "analysis_opportunity_not_ready",
+          nextAction: "POST /api/research/runs/:runId/analysis-opportunity",
+        });
+      }
+      res.json({ opportunity });
+    } catch (error) {
+      sendResearchError(res, error);
+    }
+  });
+
+  router.post("/runs/:runId/analysis-opportunity", async (req, res) => {
+    try {
+      await initResearchSchema();
+      const run = await getResearchRun(req.params.runId);
+      if (!run) return res.status(404).json({ error: "research_run_not_found" });
+      const job = await getResearchJob(run.jobId);
+      if (!job) return res.status(404).json({ error: "research_job_not_found" });
+      const existing = req.body?.forceRefresh ? null : await getAnalysisOpportunityForRun(run.id);
+      if (existing) return res.json({ opportunity: existing, cached: true });
+
+      const opportunity = buildAnalysisOpportunity({
+        job,
+        run,
+        report: await getLatestResearchReportForRun(run.id),
+        documents: await listCrawlDocumentsForRun(run.id),
+        tables: await listExtractedTablesForRun(run.id),
+        assets: await listDocumentAssetsForRun(run.id),
+        candidates: await listSearchCandidatesForRun(run.id),
+        frontier: await listFrontierItemsForRun(run.id),
+        providers: await listDiscoveryResultsForRun(run.id),
+        evidence: await listEvidenceItemsForRun(run.id),
+        claims: await listEvidenceClaimsForRun(run.id),
+        sourceProfiles: await listSourceProfiles(),
+      });
+      const saved = await upsertAnalysisOpportunity(opportunity);
+      await addRunEvent({
+        jobId: job.id,
+        runId: run.id,
+        stage: run.stage,
+        level: "info",
+        message: "已生成 Research 到 Data Lab 的分析机会评估。",
+        data: {
+          opportunityId: saved.id,
+          recommendedAnalysisMode: saved.recommendedAnalysisMode,
+          score: saved.score,
+          canEnterDataLab: saved.canEnterDataLab,
+        },
+      });
+      res.status(201).json({ opportunity: saved, cached: false });
     } catch (error) {
       sendResearchError(res, error);
     }
