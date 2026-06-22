@@ -39,6 +39,10 @@ interface DataLabProps {
   focus?: {
     runId?: string;
     datasetId?: string;
+    handoffId?: string;
+    planId?: string;
+    mode?: 'report_only' | 'light_analysis' | 'full_analysis' | 'continue_crawl';
+    page?: 'sources' | 'wizard';
   };
   onOpenResearchRun?: (runId: string) => void;
 }
@@ -2141,6 +2145,74 @@ const VisualizationPreview: React.FC<{ artifact: VisualizationArtifactSummary; c
     );
   }
 
+  if (artifact.kind === 'pie' && Array.isArray((spec as any).series?.[0]?.data)) {
+    const slices = ((spec as any).series[0].data as Array<Record<string, unknown>>)
+      .map((item) => ({ name: String(item.name ?? '-'), value: Number(item.value) }))
+      .filter((item) => Number.isFinite(item.value))
+      .slice(0, 10);
+    const total = slices.reduce((sum, item) => sum + item.value, 0) || 1;
+    return (
+      <div className="mt-3 border border-violet-200 bg-white p-3">
+        <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-[#6C4AB6]">{copy.visualPreview} / pie</div>
+        <div className="space-y-2">
+          {slices.map((slice, index) => (
+            <div key={`${slice.name}-${index}`} className="grid grid-cols-[5rem_minmax(0,1fr)_4rem] items-center gap-2 text-xs">
+              <span className="truncate font-mono" title={slice.name}>{slice.name}</span>
+              <span className="h-4 rounded-full bg-[#F0ECFF]">
+                <span className="block h-full rounded-full bg-[#6C4AB6]" style={{ width: `${Math.max(2, slice.value / total * 100)}%` }} />
+              </span>
+              <span className="text-right font-mono">{Math.round(slice.value / total * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (artifact.kind === 'box' && Array.isArray((spec as any).groups)) {
+    const groups = ((spec as any).groups as Array<Record<string, unknown>>).slice(0, 8);
+    const values = groups.flatMap((group) => [Number(group.min), Number(group.max)]).filter(Number.isFinite);
+    const min = values.length ? Math.min(...values) : 0;
+    const max = values.length ? Math.max(...values) : 1;
+    return (
+      <div className="mt-3 border border-violet-200 bg-white p-3">
+        <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-[#6C4AB6]">{copy.visualPreview} / box</div>
+        <div className="space-y-3">
+          {groups.map((group, index) => (
+            <BoxPreviewRow key={`${group.name}-${index}`} group={group} min={min} max={max} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (artifact.kind === 'heatmap' && Array.isArray((spec as any).series?.[0]?.data) && Array.isArray((spec as any).xAxis?.data)) {
+    const labels = ((spec as any).xAxis.data as unknown[]).map(String).slice(0, 8);
+    const cells = ((spec as any).series[0].data as unknown[][]).filter((cell) => cell.length >= 3);
+    return (
+      <div className="mt-3 border border-violet-200 bg-white p-3">
+        <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-[#6C4AB6]">{copy.visualPreview} / heatmap</div>
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, labels.length)}, minmax(0, 1fr))` }}>
+          {labels.flatMap((_, yIndex) => labels.map((__, xIndex) => {
+            const value = Number(cells.find((cell) => Number(cell[0]) === xIndex && Number(cell[1]) === yIndex)?.[2] ?? 0);
+            const intensity = Math.min(1, Math.abs(value));
+            return (
+              <div
+                key={`${xIndex}-${yIndex}`}
+                className="flex aspect-square items-center justify-center border border-violet-100 font-mono text-[9px]"
+                title={`${labels[xIndex]} ~ ${labels[yIndex]}: ${formatNumber(value)}`}
+                style={{ background: value >= 0 ? `rgba(108,74,182,${0.12 + intensity * 0.72})` : `rgba(185,71,42,${0.12 + intensity * 0.72})`, color: intensity > 0.55 ? '#fff' : '#1c1917' }}
+              >
+                {formatNumber(value)}
+              </div>
+            );
+          }))}
+        </div>
+        <div className="mt-2 truncate font-mono text-[10px] text-stone-500">{labels.join(' / ')}</div>
+      </div>
+    );
+  }
+
   if (artifact.kind === 'table' && Array.isArray((spec as any).rows)) {
     const rows = (spec as any).rows.slice(0, 6) as Array<Record<string, unknown>>;
     const columns = Array.isArray((spec as any).columns) ? (spec as any).columns.slice(0, 6).map(String) : Object.keys(rows[0] ?? {}).slice(0, 6);
@@ -2162,6 +2234,28 @@ const VisualizationPreview: React.FC<{ artifact: VisualizationArtifactSummary; c
   }
 
   return null;
+};
+
+const BoxPreviewRow: React.FC<{ group: Record<string, unknown>; min: number; max: number }> = ({ group, min, max }) => {
+  const scale = (value: unknown) => {
+    const numberValue = Number(value);
+    if (!Number.isFinite(numberValue)) return 0;
+    return ((numberValue - min) / Math.max(1, max - min)) * 100;
+  };
+  const left = scale(group.q1);
+  const right = scale(group.q3);
+  const median = scale(group.median);
+  return (
+    <div className="grid grid-cols-[5rem_minmax(0,1fr)_3rem] items-center gap-2 text-xs">
+      <span className="truncate font-mono" title={String(group.name ?? '-')}>{String(group.name ?? '-')}</span>
+      <span className="relative h-7 border-y border-violet-100">
+        <span className="absolute top-1/2 h-px -translate-y-1/2 bg-[#6C4AB6]" style={{ left: `${scale(group.min)}%`, width: `${Math.max(2, scale(group.max) - scale(group.min))}%` }} />
+        <span className="absolute top-1/2 h-5 -translate-y-1/2 border border-[#6C4AB6] bg-[#F0ECFF]" style={{ left: `${left}%`, width: `${Math.max(2, right - left)}%` }} />
+        <span className="absolute top-0 h-7 border-l-2 border-[#151515]" style={{ left: `${median}%` }} />
+      </span>
+      <span className="text-right font-mono">{String(group.count ?? '-')}</span>
+    </div>
+  );
 };
 
 const SvgSeriesPreview: React.FC<{ x: unknown[]; y: unknown[]; mode: 'line' | 'scatter'; label: string }> = ({ x, y, mode, label }) => {

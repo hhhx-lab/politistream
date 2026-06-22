@@ -217,6 +217,90 @@ export interface ResearchRunSummary {
   updatedAt: string;
 }
 
+export type AnalysisHandoffDecisionSummary = 'report_only' | 'light_analysis' | 'full_analysis' | 'continue_crawl';
+export type AnalysisOpportunityModeSummary = AnalysisHandoffDecisionSummary;
+
+export interface AnalysisOpportunityScoreBreakdownSummary {
+  structuredFieldDensity: number;
+  dimensionRichness: number;
+  sourceQuality: number;
+  evidenceCoverage: number;
+  analysisValue: number;
+  topicFit: number;
+  finalScore: number;
+  weights?: Record<string, number>;
+}
+
+export interface AnalysisOpportunityDataSourceSummary {
+  kind: string;
+  url?: string;
+  title?: string;
+  reason: string;
+  provider?: string;
+  sourceType?: string;
+  qualityScore?: number;
+}
+
+export interface AnalysisOpportunityEvidenceSummary {
+  claim?: string;
+  sourceUrl?: string;
+  support: string;
+  documentId?: string;
+}
+
+export interface AnalysisOpportunitySummary {
+  id?: string;
+  topic: string;
+  researchRunId: string;
+  researchJobId?: string;
+  reportId?: string;
+  taskType: string;
+  canEnterDataLab: boolean;
+  recommendedAnalysisMode: AnalysisOpportunityModeSummary;
+  score: number;
+  scoreBreakdown: AnalysisOpportunityScoreBreakdownSummary;
+  decisionReason: string;
+  candidateFeatures: string[];
+  requiredFields: string[];
+  availableFields: string[];
+  missingFields: string[];
+  recommendedDataSources: AnalysisOpportunityDataSourceSummary[];
+  recommendedActions: string[];
+  evidenceSummary: AnalysisOpportunityEvidenceSummary[];
+  warnings: string[];
+  userDecision?: AnalysisHandoffDecisionSummary;
+  handoffId?: string;
+  createdDatasetIds: string[];
+  status: 'draft' | 'ready' | 'decided' | 'failed';
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AnalysisHandoffSummary {
+  id?: string;
+  opportunityId: string;
+  researchRunId: string;
+  researchJobId?: string;
+  reportId?: string;
+  decision: AnalysisHandoffDecisionSummary;
+  targetPage: 'research-report' | 'research-discovery' | 'sources' | 'wizard';
+  topicId?: string;
+  datasetIds: string[];
+  planId?: string;
+  allowedOperations: string[];
+  nextActions: string[];
+  warnings: string[];
+  lineage: {
+    runId: string;
+    jobId?: string;
+    reportId?: string;
+    sourceDatasetId?: string;
+    opportunityId: string;
+  };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface ResearchRunEvent {
   id: string;
   jobId: string;

@@ -16,6 +16,9 @@ import {
   Search,
 } from 'lucide-react';
 import {
+  AnalysisHandoffDecisionSummary,
+  AnalysisHandoffSummary,
+  AnalysisOpportunitySummary,
   DiscoveryProviderSummary,
   DocumentLinkSummary,
   DocumentSearchResultSummary,
@@ -58,6 +61,7 @@ import {
   RunTimeline,
 } from './research/RunWorkflowPanels';
 import { SourceExplorer } from './research/SourceExplorerPanel';
+import { AnalysisDecisionPanel } from './research/AnalysisDecisionPanel';
 import {
   Badge,
   formatDate,
@@ -76,7 +80,7 @@ interface ResearchPanelProps {
   selectedJobId?: string;
   onSelectedJobChange?: (id: string | undefined) => void;
   onBackToSearch?: () => void;
-  onOpenDataLab?: (focus: { runId?: string; datasetId?: string }) => void;
+  onOpenDataLab?: (focus: { runId?: string; datasetId?: string; handoffId?: string; planId?: string; mode?: AnalysisHandoffDecisionSummary; page?: 'sources' | 'wizard' }) => void;
   language: Language;
   t: Translator;
 }
@@ -493,6 +497,10 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
   const [documentSearchQuery, setDocumentSearchQuery] = useState('');
   const [documentSearchResults, setDocumentSearchResults] = useState<DocumentSearchResultSummary[]>([]);
   const [documentSearchBusy, setDocumentSearchBusy] = useState(false);
+  const [analysisOpportunity, setAnalysisOpportunity] = useState<AnalysisOpportunitySummary | null>(null);
+  const [analysisHandoff, setAnalysisHandoff] = useState<AnalysisHandoffSummary | null>(null);
+  const [analysisDecisionBusy, setAnalysisDecisionBusy] = useState<AnalysisHandoffDecisionSummary | 'opportunity' | ''>('');
+  const [analysisDecisionError, setAnalysisDecisionError] = useState('');
   const [queueStatus, setQueueStatus] = useState<ResearchQueueStatusSummary | null>(null);
   const [providerHealth, setProviderHealth] = useState<ProviderHealthSummary[]>([]);
   const [runtimeMonitorError, setRuntimeMonitorError] = useState('');
@@ -749,10 +757,37 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     }
   };
 
+  const loadAnalysisOpportunity = async (runId: string) => {
+    try {
+      const [opportunityRes, handoffRes] = await Promise.all([
+        fetch(`/api/research/runs/${runId}/analysis-opportunity`),
+        fetch(`/api/analytics/handoffs/research-run/${runId}`),
+      ]);
+      if (opportunityRes.ok) {
+        const data = await opportunityRes.json();
+        setAnalysisOpportunity(data.opportunity ?? null);
+      } else {
+        setAnalysisOpportunity(null);
+      }
+      if (handoffRes.ok) {
+        const data = await handoffRes.json();
+        setAnalysisHandoff(data.handoff ?? null);
+      } else {
+        setAnalysisHandoff(null);
+      }
+    } catch {
+      setAnalysisOpportunity(null);
+      setAnalysisHandoff(null);
+    }
+  };
+
 	  const loadRunArtifacts = async (run: ResearchRunSummary) => {
 	    if (selectedRun?.id !== run.id) {
 	      setNewsAnalysis(null);
 	      setDocumentSearchResults([]);
+        setAnalysisOpportunity(null);
+        setAnalysisHandoff(null);
+        setAnalysisDecisionError('');
 	    }
 	    setSelectedRun(run);
 	    const [detailRes, planRes, eventsRes, frontierRes, documentsRes, assetsRes, linksRes, tablesRes, evidenceRes, claimsRes, graphRes, sourcesRes, providersRes] = await Promise.all([
@@ -805,6 +840,7 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
     setProviders(providersData.providers ?? []);
     setPlan(planData.plan ?? null);
     setPlannedQueries(planData.queries ?? []);
+    await loadAnalysisOpportunity(run.id);
   };
 
   const createAndRunJob = async () => {
@@ -903,6 +939,83 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setExportingDataSources(false);
+    }
+  };
+
+  const generateAnalysisOpportunity = async () => {
+    if (!selectedRun) return;
+    setAnalysisDecisionBusy('opportunity');
+    setAnalysisDecisionError('');
+    try {
+      const res = await fetch(`/api/research/runs/${selectedRun.id}/analysis-opportunity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json() as { opportunity?: AnalysisOpportunitySummary; error?: string; message?: string };
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      setAnalysisOpportunity(data.opportunity ?? null);
+      setMessage(language === 'zh' ? '已生成 Research 到 Data Lab 的分析判断。' : 'Analysis opportunity generated.');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setAnalysisDecisionError(text);
+      setMessage(text);
+    } finally {
+      setAnalysisDecisionBusy('');
+    }
+  };
+
+  const createAnalysisHandoff = async (decision: AnalysisHandoffDecisionSummary) => {
+    if (!selectedRun) return;
+    setAnalysisDecisionBusy(decision);
+    setAnalysisDecisionError('');
+    try {
+      const res = await fetch(`/api/research/runs/${selectedRun.id}/analysis-handoff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      });
+      const data = await res.json() as {
+        handoff?: AnalysisHandoffSummary;
+        opportunity?: AnalysisOpportunitySummary;
+        handoff_id?: string;
+        plan_id?: string;
+        targetPage?: string;
+        target_page?: string;
+        dataset_ids?: string[];
+        datasets?: Array<{ id?: string }>;
+        plannedQueries?: PlannedQuerySummary[];
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      const handoff = data.handoff ?? null;
+      setAnalysisHandoff(handoff);
+      if (data.opportunity) setAnalysisOpportunity(data.opportunity);
+
+      if (decision === 'light_analysis' || decision === 'full_analysis') {
+        const datasetId = data.dataset_ids?.[0] ?? handoff?.datasetIds[0] ?? data.datasets?.[0]?.id;
+        onOpenDataLab?.({
+          runId: selectedRun.id,
+          datasetId,
+          handoffId: data.handoff_id ?? handoff?.id,
+          planId: data.plan_id ?? handoff?.planId,
+          mode: decision,
+          page: decision === 'full_analysis' ? 'wizard' : 'sources',
+        });
+      } else if (decision === 'continue_crawl') {
+        setActivePage('plan');
+        await loadRuns(selectedRun.jobId);
+        await loadRunArtifacts(selectedRun);
+      } else {
+        setActivePage('report');
+      }
+      setMessage(language === 'zh' ? '已记录分析交接决策。' : 'Analysis handoff saved.');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setAnalysisDecisionError(text);
+      setMessage(text);
+    } finally {
+      setAnalysisDecisionBusy('');
     }
   };
 
@@ -1165,6 +1278,16 @@ export const ResearchPanel: React.FC<ResearchPanelProps> = ({
                     </div>
                   </div>
                 </Panel>
+                <AnalysisDecisionPanel
+                  language={language}
+                  run={selectedRun}
+                  opportunity={analysisOpportunity}
+                  handoff={analysisHandoff}
+                  busy={analysisDecisionBusy}
+                  error={analysisDecisionError}
+                  onGenerate={generateAnalysisOpportunity}
+                  onDecision={createAnalysisHandoff}
+                />
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
                   <RunTimeline run={selectedRun} events={events} language={language} t={t} />
                   <Panel title={language === 'zh' ? '下一步' : 'Next steps'}>

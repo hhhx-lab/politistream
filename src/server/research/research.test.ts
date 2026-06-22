@@ -941,6 +941,20 @@ function testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery() {
   assert.ok(routesSource.includes('if (run.status === "cancelled") return res.status(409)'), "cancelled runs should be rejected safely");
 }
 
+function testResearchAnalysisDecisionUiIsWired() {
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+  const decisionSource = readFileSync(new URL("../../components/research/AnalysisDecisionPanel.tsx", import.meta.url), "utf8");
+
+  assert.ok(panelSource.includes("AnalysisDecisionPanel"), "Research UI should render the analysis decision panel");
+  assert.ok(panelSource.includes("/analysis-opportunity"), "Research UI should call the analysis opportunity API");
+  assert.ok(panelSource.includes("/analysis-handoff"), "Research UI should call the analysis handoff API");
+  assert.ok(panelSource.includes("page: decision === 'full_analysis' ? 'wizard' : 'sources'"), "Research UI should route Data Lab to sources or wizard by decision");
+  assert.ok(decisionSource.includes("scoreBreakdown"), "Analysis drawer should show score breakdown");
+  assert.ok(decisionSource.includes("recommendedDataSources"), "Analysis drawer should show recommended data sources");
+  assert.ok(decisionSource.includes("evidenceSummary"), "Analysis drawer should show evidence summaries");
+  assert.ok(decisionSource.includes("missingFields"), "Analysis drawer should show missing fields");
+}
+
 async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
   const result = await runProviderLiveSmoke({
     topic: "document conversion tools",
@@ -1180,6 +1194,7 @@ testResearchCapabilityAuditApiAndUiAreWired();
 testAnalysisReportOnlyHandoffStaysSideEffectFree();
 testAnalysisFullHandoffCarriesWizardMetadata();
 testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery();
+testResearchAnalysisDecisionUiIsWired();
 await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();
 testPressureSmokeExposesStandardAndDeepBudgets();
 await testDataSourceLiveSmokeUsesPublicDiscoveryProviders();

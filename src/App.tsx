@@ -36,6 +36,10 @@ type ResearchMode = 'quick' | 'standard' | 'deep';
 interface DataLabFocus {
   runId?: string;
   datasetId?: string;
+  handoffId?: string;
+  planId?: string;
+  mode?: 'report_only' | 'light_analysis' | 'full_analysis' | 'continue_crawl';
+  page?: 'sources' | 'wizard';
 }
 
 interface ResearchSearchInput {
