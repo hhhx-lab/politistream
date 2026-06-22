@@ -38,6 +38,7 @@ import {
   listSearchCandidatesForRun,
   listSourceProfiles,
   upsertAnalysisOpportunity,
+  upsertAnalysisHandoff,
   resetFailedFrontierItemsForRun,
   searchCrawlDocumentsForRun,
   updateResearchJobStatus,
@@ -47,7 +48,7 @@ import {
 import { createQueuedResearchRun } from "./run";
 import { enqueueResearchStage, getQueueStatus } from "./workers/queues";
 import { resumeStageForRunStatus } from "./workers/stageTypes";
-import type { PlannedQuery, QueryPurpose, SourceType } from "./types";
+import type { AnalysisHandoff, AnalysisHandoffDecision, AnalysisOpportunity, PlannedQuery, QueryPurpose, ResearchJob, ResearchRun, SourceType } from "./types";
 
 export function createResearchRouter() {
   const router = Router();
@@ -290,6 +291,60 @@ export function createResearchRouter() {
         },
       });
       res.status(201).json({ opportunity: saved, cached: false });
+    } catch (error) {
+      sendResearchError(res, error);
+    }
+  });
+
+  router.post("/runs/:runId/analysis-handoff", async (req, res) => {
+    try {
+      await initResearchSchema();
+      const decision = normalizeAnalysisHandoffDecisionInput(req.body?.decision);
+      if (!decision) {
+        return res.status(400).json({
+          error: "invalid_analysis_handoff_decision",
+          allowedDecisions: ANALYSIS_HANDOFF_DECISIONS,
+        });
+      }
+
+      const run = await getResearchRun(req.params.runId);
+      if (!run) return res.status(404).json({ error: "research_run_not_found" });
+      if (run.status === "cancelled") return res.status(409).json({ error: "research_run_cancelled" });
+
+      const job = await getResearchJob(run.jobId);
+      if (!job) return res.status(404).json({ error: "research_job_not_found" });
+
+      const opportunity = await ensureAnalysisOpportunityForHandoff({
+        job,
+        run,
+        forceRefresh: Boolean(req.body?.forceRefreshOpportunity),
+      });
+      if (!opportunity.id) {
+        return res.status(500).json({ error: "analysis_opportunity_id_missing" });
+      }
+
+      const handoffDraft = buildAnalysisHandoffDraft({ opportunity, job, run, decision });
+      const handoff = await upsertAnalysisHandoff(handoffDraft);
+      await addRunEvent({
+        jobId: job.id,
+        runId: run.id,
+        stage: run.stage,
+        level: "info",
+        message: "已记录 Research 到 Data Lab 的分析交接决策。",
+        data: {
+          handoffId: handoff.id,
+          opportunityId: opportunity.id,
+          decision: handoff.decision,
+          targetPage: handoff.targetPage,
+        },
+      });
+
+      res.status(201).json(formatAnalysisHandoffResponse({
+        handoff,
+        opportunity,
+        datasets: [],
+        plannedQueries: [],
+      }));
     } catch (error) {
       sendResearchError(res, error);
     }
@@ -568,6 +623,179 @@ export function createResearchRouter() {
   });
 
   return router;
+}
+
+const ANALYSIS_HANDOFF_DECISIONS: AnalysisHandoffDecision[] = [
+  "report_only",
+  "light_analysis",
+  "full_analysis",
+  "continue_crawl",
+];
+
+async function ensureAnalysisOpportunityForHandoff(input: {
+  job: ResearchJob;
+  run: ResearchRun;
+  forceRefresh?: boolean;
+}): Promise<AnalysisOpportunity> {
+  const existing = input.forceRefresh ? null : await getAnalysisOpportunityForRun(input.run.id);
+  if (existing) return existing;
+
+  const opportunity = await buildAnalysisOpportunityWithLlmExpansion({
+    job: input.job,
+    run: input.run,
+    report: await getLatestResearchReportForRun(input.run.id),
+    documents: await listCrawlDocumentsForRun(input.run.id),
+    tables: await listExtractedTablesForRun(input.run.id),
+    assets: await listDocumentAssetsForRun(input.run.id),
+    candidates: await listSearchCandidatesForRun(input.run.id),
+    frontier: await listFrontierItemsForRun(input.run.id),
+    providers: await listDiscoveryResultsForRun(input.run.id),
+    evidence: await listEvidenceItemsForRun(input.run.id),
+    claims: await listEvidenceClaimsForRun(input.run.id),
+    sourceProfiles: await listSourceProfiles(),
+  });
+  const saved = await upsertAnalysisOpportunity(opportunity);
+  await addRunEvent({
+    jobId: input.job.id,
+    runId: input.run.id,
+    stage: input.run.stage,
+    level: "info",
+    message: "分析交接前已自动生成 Research 到 Data Lab 的分析机会评估。",
+    data: {
+      opportunityId: saved.id,
+      recommendedAnalysisMode: saved.recommendedAnalysisMode,
+      score: saved.score,
+      canEnterDataLab: saved.canEnterDataLab,
+    },
+  });
+  return saved;
+}
+
+function buildAnalysisHandoffDraft(input: {
+  opportunity: AnalysisOpportunity;
+  job: ResearchJob;
+  run: ResearchRun;
+  decision: AnalysisHandoffDecision;
+}): AnalysisHandoff {
+  const warnings = [
+    ...input.opportunity.warnings,
+    ...handoffWarningsForDecision(input.decision, input.opportunity),
+  ];
+  return {
+    opportunityId: input.opportunity.id ?? "",
+    researchRunId: input.run.id,
+    researchJobId: input.job.id,
+    reportId: input.opportunity.reportId,
+    decision: input.decision,
+    targetPage: targetPageForHandoffDecision(input.decision),
+    topicId: topicIdForHandoffDecision(input.decision, input.job.id),
+    datasetIds: [],
+    planId: planIdForHandoffDecision(input.decision, input.opportunity.id),
+    allowedOperations: allowedOperationsForHandoffDecision(input.decision),
+    nextActions: nextActionsForHandoffDecision(input.decision, input.opportunity),
+    warnings,
+    lineage: {
+      runId: input.run.id,
+      jobId: input.job.id,
+      reportId: input.opportunity.reportId,
+      opportunityId: input.opportunity.id ?? "",
+    },
+  };
+}
+
+function formatAnalysisHandoffResponse(input: {
+  handoff: AnalysisHandoff;
+  opportunity: AnalysisOpportunity;
+  datasets: Array<Record<string, unknown>>;
+  plannedQueries: PlannedQuery[];
+}) {
+  return {
+    handoff: input.handoff,
+    opportunity: input.opportunity,
+    handoff_id: input.handoff.id,
+    decision: input.handoff.decision,
+    target_page: input.handoff.targetPage,
+    targetPage: input.handoff.targetPage,
+    topic_id: input.handoff.topicId,
+    plan_id: input.handoff.planId,
+    dataset_ids: input.handoff.datasetIds,
+    datasets: input.datasets,
+    plannedQueries: input.plannedQueries,
+    next_actions: input.handoff.nextActions,
+    warnings: input.handoff.warnings,
+  };
+}
+
+function normalizeAnalysisHandoffDecisionInput(value: unknown): AnalysisHandoffDecision | null {
+  return ANALYSIS_HANDOFF_DECISIONS.includes(value as AnalysisHandoffDecision)
+    ? value as AnalysisHandoffDecision
+    : null;
+}
+
+function targetPageForHandoffDecision(decision: AnalysisHandoffDecision): AnalysisHandoff["targetPage"] {
+  if (decision === "report_only") return "research-report";
+  if (decision === "continue_crawl") return "research-discovery";
+  if (decision === "light_analysis") return "sources";
+  return "wizard";
+}
+
+function topicIdForHandoffDecision(decision: AnalysisHandoffDecision, jobId: string) {
+  return decision === "full_analysis" ? `research-topic:${jobId}` : undefined;
+}
+
+function planIdForHandoffDecision(decision: AnalysisHandoffDecision, opportunityId?: string) {
+  return decision === "full_analysis" && opportunityId ? `analysis-plan:${opportunityId}` : undefined;
+}
+
+function allowedOperationsForHandoffDecision(decision: AnalysisHandoffDecision) {
+  if (decision === "report_only") return [];
+  if (decision === "continue_crawl") return ["discovery", "planned_queries"];
+  if (decision === "light_analysis") return ["profile", "stats", "chart"];
+  return [
+    "profile",
+    "stats",
+    "quality",
+    "frequency",
+    "crosstab",
+    "tests",
+    "regression",
+    "cluster",
+    "timeseries",
+    "geo",
+    "chart",
+    "report",
+    "export",
+  ];
+}
+
+function nextActionsForHandoffDecision(decision: AnalysisHandoffDecision, opportunity: AnalysisOpportunity) {
+  if (decision === "report_only") {
+    return ["继续查看 Research 报告", "如后续发现结构化数据，可重新生成分析机会"];
+  }
+  if (decision === "light_analysis") {
+    return ["进入 Data Lab 来源页", "检查并物化可用数据源", "运行画像、描述统计和基础图表"];
+  }
+  if (decision === "full_analysis") {
+    return ["进入 Data Lab 分析向导", "确认字段覆盖和字段映射", "生成主题驱动的数据分析计划"];
+  }
+  const missing = opportunity.missingFields.slice(0, 4).join("、");
+  return missing
+    ? [`补充抓取缺失字段：${missing}`, "重新进入 Research discovery"]
+    : ["补充抓取更多结构化数据源", "重新进入 Research discovery"];
+}
+
+function handoffWarningsForDecision(decision: AnalysisHandoffDecision, opportunity: AnalysisOpportunity) {
+  const warnings: string[] = [];
+  if ((decision === "light_analysis" || decision === "full_analysis") && !opportunity.canEnterDataLab) {
+    warnings.push("当前 Research 结果的数据分析适配度较低，建议先检查字段覆盖或继续抓取。");
+  }
+  if (decision === "full_analysis" && opportunity.missingFields.length > 0) {
+    warnings.push(`完整分析仍缺少字段：${opportunity.missingFields.slice(0, 6).join("、")}`);
+  }
+  if (decision !== opportunity.recommendedAnalysisMode) {
+    warnings.push(`用户选择了 ${decision}，与系统推荐的 ${opportunity.recommendedAnalysisMode} 不同。`);
+  }
+  return warnings;
 }
 
 function summarizeClaims(claims: Awaited<ReturnType<typeof listEvidenceClaimsForRun>>) {

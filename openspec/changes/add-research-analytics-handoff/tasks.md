@@ -1,14 +1,14 @@
 ## 1. Research Opportunity Backend
 
-- [ ] 1.1 Add shared AnalysisOpportunity and AnalysisHandoff types with decision modes, score breakdown, field coverage, source recommendations, warnings, and lineage metadata.
-- [ ] 1.2 Add persistence helpers for creating, reading, updating, and lazy-loading analysis opportunities and handoffs by research run id.
-- [ ] 1.3 Implement deterministic opportunity scoring from Research documents, extracted tables, assets, candidates, frontier items, providers, source profiles, reports, and topic terms.
-- [ ] 1.4 Add optional LLM-assisted topic expansion for task type, candidate features, missing fields, recommended data sources, and explanation with deterministic fallback.
-- [ ] 1.5 Add `POST /api/research/runs/:runId/analysis-opportunity` and `GET /api/research/runs/:runId/analysis-opportunity` routes that never create datasets or analytics jobs.
+- [x] 1.1 Add shared AnalysisOpportunity and AnalysisHandoff types with decision modes, score breakdown, field coverage, source recommendations, warnings, and lineage metadata.
+- [x] 1.2 Add persistence helpers for creating, reading, updating, and lazy-loading analysis opportunities and handoffs by research run id.
+- [x] 1.3 Implement deterministic opportunity scoring from Research documents, extracted tables, assets, candidates, frontier items, providers, source profiles, reports, and topic terms.
+- [x] 1.4 Add optional LLM-assisted topic expansion for task type, candidate features, missing fields, recommended data sources, and explanation with deterministic fallback.
+- [x] 1.5 Add `POST /api/research/runs/:runId/analysis-opportunity` and `GET /api/research/runs/:runId/analysis-opportunity` routes that never create datasets or analytics jobs.
 
 ## 2. Research Handoff Backend
 
-- [ ] 2.1 Implement `POST /api/research/runs/:runId/analysis-handoff` with `report_only`, `light_analysis`, `full_analysis`, and `continue_crawl` decisions.
+- [x] 2.1 Implement `POST /api/research/runs/:runId/analysis-handoff` with `report_only`, `light_analysis`, `full_analysis`, and `continue_crawl` decisions.
 - [ ] 2.2 Ensure `report_only` records the decision without creating analytics datasets or worker jobs.
 - [ ] 2.3 Ensure `light_analysis` creates or reuses a Research data-source registry or lightweight dataset and records allowed operations as profile, stats, and basic charts.
 - [ ] 2.4 Ensure `full_analysis` creates or reuses source registry context and creates topic/plan metadata for Data Lab wizard entry.
