@@ -7,7 +7,7 @@ import { runResearchSampleAcceptance, type ResearchSampleAcceptanceKind } from "
 import { getLatestSmokeEvidence, persistSmokeEvidence, runDataSourceLiveSmoke, runPressureSmoke, runProviderLiveSmoke } from "./evaluation/smoke";
 import { summarizeEvidenceGraph } from "./evidence/graph";
 import { sendResearchConfigStatus, sendResearchError } from "./http";
-import { buildAnalysisOpportunity } from "./analysisOpportunity";
+import { buildAnalysisOpportunityWithLlmExpansion } from "./analysisOpportunity";
 import {
   addRunEvent,
   appendPlannedQueryForRun,
@@ -261,7 +261,7 @@ export function createResearchRouter() {
       const existing = req.body?.forceRefresh ? null : await getAnalysisOpportunityForRun(run.id);
       if (existing) return res.json({ opportunity: existing, cached: true });
 
-      const opportunity = buildAnalysisOpportunity({
+      const opportunity = await buildAnalysisOpportunityWithLlmExpansion({
         job,
         run,
         report: await getLatestResearchReportForRun(run.id),

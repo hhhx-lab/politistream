@@ -17,6 +17,7 @@ import {
   SourceProfile,
   SourceType,
 } from "./types";
+import { generateStructuredJson } from "../services/llm";
 
 export interface BuildAnalysisOpportunityInput {
   job: ResearchJob;
@@ -97,6 +98,103 @@ export function buildAnalysisOpportunity(input: BuildAnalysisOpportunityInput): 
     warnings,
     createdDatasetIds: [],
     status: "ready",
+  };
+}
+
+interface OpportunityExpansion {
+  taskType?: string;
+  candidateFeatures?: string[];
+  requiredFields?: string[];
+  missingFields?: string[];
+  recommendedDataSources?: Array<{ kind?: string; url?: string; title?: string; reason?: string }>;
+  recommendedActions?: string[];
+  decisionReason?: string;
+  warnings?: string[];
+}
+
+const OPPORTUNITY_EXPANSION_SCHEMA = {
+  type: "object",
+  properties: {
+    taskType: { type: "string" },
+    candidateFeatures: { type: "array", items: { type: "string" } },
+    requiredFields: { type: "array", items: { type: "string" } },
+    missingFields: { type: "array", items: { type: "string" } },
+    recommendedDataSources: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          kind: { type: "string" },
+          url: { type: "string" },
+          title: { type: "string" },
+          reason: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+    },
+    recommendedActions: { type: "array", items: { type: "string" } },
+    decisionReason: { type: "string" },
+    warnings: { type: "array", items: { type: "string" } },
+  },
+  additionalProperties: false,
+};
+
+export async function buildAnalysisOpportunityWithLlmExpansion(input: BuildAnalysisOpportunityInput): Promise<AnalysisOpportunity> {
+  const deterministic = buildAnalysisOpportunity(input);
+  const result = await generateStructuredJson<OpportunityExpansion>({
+    instructions: "你是 Research 到 Data Lab 的分析机会评估助手。只能补充变量、缺失字段、数据源建议和解释；不得编造统计结果、模型结果、图表数值或结论数字。",
+    schemaName: "analysis_opportunity_expansion",
+    schemas: { openai: OPPORTUNITY_EXPANSION_SCHEMA },
+    prompt: `请基于下面的确定性评估，补充更细的候选字段、缺失字段、推荐数据源和解释。
+
+研究主题: ${input.job.topic}
+确定性评估:
+${JSON.stringify({
+  taskType: deterministic.taskType,
+  recommendedAnalysisMode: deterministic.recommendedAnalysisMode,
+  score: deterministic.score,
+  candidateFeatures: deterministic.candidateFeatures,
+  requiredFields: deterministic.requiredFields,
+  availableFields: deterministic.availableFields,
+  missingFields: deterministic.missingFields,
+  recommendedDataSources: deterministic.recommendedDataSources,
+  warnings: deterministic.warnings,
+}, null, 2)}
+
+已抓取摘要:
+${collectSignalText(input).slice(0, 12000)}
+`,
+  }).catch(() => null);
+
+  if (!result?.data) return deterministic;
+  const expansion = result.data;
+  const nextRequiredFields = unique([...deterministic.requiredFields, ...normalizeExpansionStrings(expansion.requiredFields)]);
+  const nextCandidateFeatures = unique([...deterministic.candidateFeatures, ...normalizeExpansionStrings(expansion.candidateFeatures), ...nextRequiredFields]).slice(0, 24);
+  const nextMissingFields = unique([...deterministic.missingFields, ...normalizeExpansionStrings(expansion.missingFields)])
+    .filter((field) => !deterministic.availableFields.includes(field));
+  const nextSources = uniqueSources([
+    ...deterministic.recommendedDataSources,
+    ...(Array.isArray(expansion.recommendedDataSources)
+      ? expansion.recommendedDataSources.map((source) => ({
+          kind: source.kind || "suggested-source",
+          url: source.url,
+          title: source.title,
+          reason: source.reason || "LLM suggested source for missing analysis fields",
+          qualityScore: 0.55,
+        }))
+      : []),
+  ]).slice(0, 12);
+
+  return {
+    ...deterministic,
+    taskType: normalizeExpandedTaskType(expansion.taskType, deterministic.taskType),
+    candidateFeatures: nextCandidateFeatures,
+    requiredFields: nextRequiredFields,
+    missingFields: nextMissingFields,
+    recommendedDataSources: nextSources,
+    recommendedActions: unique([...deterministic.recommendedActions, ...normalizeExpansionStrings(expansion.recommendedActions)]).slice(0, 10),
+    decisionReason: expansion.decisionReason || deterministic.decisionReason,
+    warnings: unique([...deterministic.warnings, ...normalizeExpansionStrings(expansion.warnings)]),
   };
 }
 
@@ -322,6 +420,31 @@ function formatHint(url: string) {
 
 function unique(items: string[]) {
   return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+}
+
+function normalizeExpansionStrings(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => normalizeFieldName(String(item).trim())).filter(Boolean) : [];
+}
+
+function normalizeExpandedTaskType(value: unknown, fallback: AnalysisOpportunityTaskType): AnalysisOpportunityTaskType {
+  const normalized = String(value ?? "");
+  const allowed = new Set<AnalysisOpportunityTaskType>([
+    "survey",
+    "verification",
+    "tool-evaluation",
+    "policy",
+    "technical",
+    "competitive",
+    "monitoring",
+    "data-research",
+    "sports-analysis",
+    "analytics",
+    "market-research",
+    "product-comparison",
+    "news-trace",
+    "unknown",
+  ]);
+  return allowed.has(normalized as AnalysisOpportunityTaskType) ? normalized as AnalysisOpportunityTaskType : fallback;
 }
 
 function uniqueSources(items: AnalysisOpportunityDataSource[]) {
