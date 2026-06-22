@@ -949,6 +949,7 @@ function testResearchAnalysisDecisionUiIsWired() {
   assert.ok(panelSource.includes("/analysis-opportunity"), "Research UI should call the analysis opportunity API");
   assert.ok(panelSource.includes("/analysis-handoff"), "Research UI should call the analysis handoff API");
   assert.ok(panelSource.includes("page: decision === 'full_analysis' ? 'wizard' : 'sources'"), "Research UI should route Data Lab to sources or wizard by decision");
+  assert.ok(decisionSource.includes("AnalysisOpportunityDrawer"), "Research UI should expose a named AnalysisOpportunityDrawer");
   assert.ok(decisionSource.includes("scoreBreakdown"), "Analysis drawer should show score breakdown");
   assert.ok(decisionSource.includes("recommendedDataSources"), "Analysis drawer should show recommended data sources");
   assert.ok(decisionSource.includes("evidenceSummary"), "Analysis drawer should show evidence summaries");

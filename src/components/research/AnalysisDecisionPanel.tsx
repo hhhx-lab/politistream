@@ -112,36 +112,44 @@ export const AnalysisDecisionPanel: React.FC<AnalysisDecisionPanelProps> = ({
             </div>
           </div>
 
-          {detailsOpen && (
-            <div className="grid gap-3 lg:grid-cols-2">
-              <DetailBlock title={copy.breakdown} rows={scoreRows(opportunity)} />
-              <DetailBlock title={copy.fieldCoverage} rows={[
-                [copy.required, opportunity.requiredFields.join(', ') || '-'],
-                [copy.available, opportunity.availableFields.join(', ') || '-'],
-                [copy.missing, opportunity.missingFields.join(', ') || '-'],
-              ]} />
-              <DetailBlock title={copy.sources} rows={opportunity.recommendedDataSources.slice(0, 8).map((source) => [
-                source.title || source.kind,
-                [source.sourceType, source.provider, source.reason].filter(Boolean).join(' / '),
-              ])} />
-              <DetailBlock title={copy.evidence} rows={opportunity.evidenceSummary.slice(0, 8).map((item) => [
-                item.claim || item.sourceUrl || '-',
-                item.support,
-              ])} />
-              {opportunity.warnings.length > 0 && (
-                <div className="border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900 lg:col-span-2">
-                  <div className="mb-2 font-mono text-[10px] uppercase opacity-70">{copy.warnings}</div>
-                  <ul className="space-y-1">
-                    {opportunity.warnings.map((warning) => <li key={warning}>{warning}</li>)}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+          {detailsOpen && <AnalysisOpportunityDrawer language={language} opportunity={opportunity} />}
         </div>
       )}
       {!zh && <span className="sr-only">Analysis decision bridge</span>}
     </Panel>
+  );
+};
+
+export const AnalysisOpportunityDrawer: React.FC<{
+  language: Language;
+  opportunity: AnalysisOpportunitySummary;
+}> = ({ language, opportunity }) => {
+  const copy = analysisCopy[language];
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <DetailBlock title={copy.breakdown} rows={scoreRows(opportunity)} />
+      <DetailBlock title={copy.fieldCoverage} rows={[
+        [copy.required, opportunity.requiredFields.join(', ') || '-'],
+        [copy.available, opportunity.availableFields.join(', ') || '-'],
+        [copy.missing, opportunity.missingFields.join(', ') || '-'],
+      ]} />
+      <DetailBlock title={copy.sources} rows={opportunity.recommendedDataSources.slice(0, 8).map((source) => [
+        source.title || source.kind,
+        [source.sourceType, source.provider, source.reason].filter(Boolean).join(' / '),
+      ])} />
+      <DetailBlock title={copy.evidence} rows={opportunity.evidenceSummary.slice(0, 8).map((item) => [
+        item.claim || item.sourceUrl || '-',
+        item.support,
+      ])} />
+      {opportunity.warnings.length > 0 && (
+        <div className="border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900 lg:col-span-2">
+          <div className="mb-2 font-mono text-[10px] uppercase opacity-70">{copy.warnings}</div>
+          <ul className="space-y-1">
+            {opportunity.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 };
 
