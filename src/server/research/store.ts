@@ -7,6 +7,15 @@ import { normalizeResearchConstraints } from "./queryPlanner";
 import { topicFingerprint } from "./memory/researchMemory";
 import { tokenizeDocumentSearchQuery } from "./search/documentIndex";
 import {
+  AnalysisHandoff,
+  AnalysisHandoffDecision,
+  AnalysisOpportunity,
+  AnalysisOpportunityDataSource,
+  AnalysisOpportunityEvidenceSummary,
+  AnalysisOpportunityMode,
+  AnalysisOpportunityScoreBreakdown,
+  AnalysisOpportunityStatus,
+  AnalysisOpportunityTaskType,
   CrawlDocument,
   DocumentAsset,
   DocumentLinkRecord,
@@ -26,6 +35,7 @@ import {
   ResearchRunStatus,
   RunEvent,
   SearchCandidate,
+  SourceType,
   SourceProfile,
 } from "./types";
 
@@ -323,6 +333,53 @@ async function initResearchSchemaOnce() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS analysis_opportunities (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES research_jobs(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE UNIQUE,
+      report_id TEXT REFERENCES research_reports(id) ON DELETE SET NULL,
+      topic TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      can_enter_datalab INTEGER NOT NULL DEFAULT 0,
+      recommended_analysis_mode TEXT NOT NULL,
+      score REAL NOT NULL,
+      score_breakdown JSONB NOT NULL DEFAULT '{}',
+      decision_reason TEXT NOT NULL DEFAULT '',
+      candidate_features JSONB NOT NULL DEFAULT '[]',
+      required_fields JSONB NOT NULL DEFAULT '[]',
+      available_fields JSONB NOT NULL DEFAULT '[]',
+      missing_fields JSONB NOT NULL DEFAULT '[]',
+      recommended_data_sources JSONB NOT NULL DEFAULT '[]',
+      recommended_actions JSONB NOT NULL DEFAULT '[]',
+      evidence_summary JSONB NOT NULL DEFAULT '[]',
+      warnings JSONB NOT NULL DEFAULT '[]',
+      user_decision TEXT,
+      handoff_id TEXT,
+      created_dataset_ids JSONB NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS analysis_handoffs (
+      id TEXT PRIMARY KEY,
+      opportunity_id TEXT NOT NULL REFERENCES analysis_opportunities(id) ON DELETE CASCADE UNIQUE,
+      job_id TEXT NOT NULL REFERENCES research_jobs(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE UNIQUE,
+      report_id TEXT REFERENCES research_reports(id) ON DELETE SET NULL,
+      decision TEXT NOT NULL,
+      target_page TEXT NOT NULL,
+      topic_id TEXT,
+      dataset_ids JSONB NOT NULL DEFAULT '[]',
+      plan_id TEXT,
+      allowed_operations JSONB NOT NULL DEFAULT '[]',
+      next_actions JSONB NOT NULL DEFAULT '[]',
+      warnings JSONB NOT NULL DEFAULT '[]',
+      lineage JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     ALTER TABLE crawl_documents ADD COLUMN IF NOT EXISTS search_vector tsvector;
     ALTER TABLE frontier_items ADD COLUMN IF NOT EXISTS score_breakdown JSONB NOT NULL DEFAULT '{}';
 
@@ -333,6 +390,8 @@ async function initResearchSchemaOnce() {
     CREATE INDEX IF NOT EXISTS idx_evidence_items_job ON evidence_items(job_id);
     CREATE INDEX IF NOT EXISTS idx_research_reports_job ON research_reports(job_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_research_runs_job ON research_runs(job_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_analysis_opportunities_job ON analysis_opportunities(job_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_analysis_handoffs_job ON analysis_handoffs(job_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_frontier_items_run ON frontier_items(run_id, status, priority_score DESC);
     CREATE INDEX IF NOT EXISTS idx_document_links_run ON document_links(run_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_evidence_claims_run ON evidence_claims(run_id);
@@ -351,6 +410,35 @@ async function initResearchSchemaOnce() {
     ALTER TABLE evidence_items ADD COLUMN IF NOT EXISTS supports_claim BOOLEAN;
 	    ALTER TABLE evidence_items ADD COLUMN IF NOT EXISTS contradicts_claim BOOLEAN;
 	    ALTER TABLE research_reports ADD COLUMN IF NOT EXISTS run_id TEXT;
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS report_id TEXT;
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'unknown';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS can_enter_datalab INTEGER NOT NULL DEFAULT 0;
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS recommended_analysis_mode TEXT NOT NULL DEFAULT 'report_only';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS score REAL NOT NULL DEFAULT 0;
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS score_breakdown JSONB NOT NULL DEFAULT '{}';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS decision_reason TEXT NOT NULL DEFAULT '';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS candidate_features JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS required_fields JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS available_fields JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS missing_fields JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS recommended_data_sources JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS recommended_actions JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS evidence_summary JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS warnings JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS user_decision TEXT;
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS handoff_id TEXT;
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS created_dataset_ids JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+	    ALTER TABLE analysis_opportunities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS report_id TEXT;
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS topic_id TEXT;
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS dataset_ids JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS plan_id TEXT;
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS allowed_operations JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS next_actions JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS warnings JSONB NOT NULL DEFAULT '[]';
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS lineage JSONB NOT NULL DEFAULT '{}';
+	    ALTER TABLE analysis_handoffs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 	    ALTER TABLE research_jobs ADD COLUMN IF NOT EXISTS constraints JSONB NOT NULL DEFAULT '{}';
 	    ALTER TABLE document_links ADD COLUMN IF NOT EXISTS run_id TEXT;
 	    ALTER TABLE document_links ADD COLUMN IF NOT EXISTS context TEXT;
@@ -1368,6 +1456,152 @@ export async function listSourceProfiles(): Promise<SourceProfile[]> {
   return result.rows.map(mapSourceProfile);
 }
 
+export async function getAnalysisOpportunityForRun(runId: string): Promise<AnalysisOpportunity | null> {
+  const result = await getPool().query(
+    "SELECT * FROM analysis_opportunities WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [runId],
+  );
+  return result.rows[0] ? mapAnalysisOpportunity(result.rows[0]) : null;
+}
+
+export async function upsertAnalysisOpportunity(opportunity: AnalysisOpportunity): Promise<AnalysisOpportunity> {
+  const id = opportunity.id ?? randomUUID();
+  const result = await getPool().query(
+    `
+      INSERT INTO analysis_opportunities (
+        id, job_id, run_id, report_id, topic, task_type, can_enter_datalab,
+        recommended_analysis_mode, score, score_breakdown, decision_reason,
+        candidate_features, required_fields, available_fields, missing_fields,
+        recommended_data_sources, recommended_actions, evidence_summary, warnings,
+        user_decision, handoff_id, created_dataset_ids, status
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+      ON CONFLICT (run_id) DO UPDATE SET
+        report_id = EXCLUDED.report_id,
+        topic = EXCLUDED.topic,
+        task_type = EXCLUDED.task_type,
+        can_enter_datalab = EXCLUDED.can_enter_datalab,
+        recommended_analysis_mode = EXCLUDED.recommended_analysis_mode,
+        score = EXCLUDED.score,
+        score_breakdown = EXCLUDED.score_breakdown,
+        decision_reason = EXCLUDED.decision_reason,
+        candidate_features = EXCLUDED.candidate_features,
+        required_fields = EXCLUDED.required_fields,
+        available_fields = EXCLUDED.available_fields,
+        missing_fields = EXCLUDED.missing_fields,
+        recommended_data_sources = EXCLUDED.recommended_data_sources,
+        recommended_actions = EXCLUDED.recommended_actions,
+        evidence_summary = EXCLUDED.evidence_summary,
+        warnings = EXCLUDED.warnings,
+        user_decision = COALESCE(analysis_opportunities.user_decision, EXCLUDED.user_decision),
+        handoff_id = COALESCE(analysis_opportunities.handoff_id, EXCLUDED.handoff_id),
+        created_dataset_ids = CASE
+          WHEN jsonb_array_length(EXCLUDED.created_dataset_ids) > 0 THEN EXCLUDED.created_dataset_ids
+          ELSE analysis_opportunities.created_dataset_ids
+        END,
+        status = EXCLUDED.status,
+        updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      id,
+      opportunity.researchJobId ?? "",
+      opportunity.researchRunId,
+      opportunity.reportId ?? null,
+      sanitizePostgresText(opportunity.topic) ?? opportunity.topic,
+      opportunity.taskType,
+      opportunity.canEnterDataLab ? 1 : 0,
+      opportunity.recommendedAnalysisMode,
+      opportunity.score,
+      sanitizeJsonForPostgres(opportunity.scoreBreakdown),
+      sanitizePostgresText(opportunity.decisionReason) ?? opportunity.decisionReason,
+      sanitizeJsonForPostgres(opportunity.candidateFeatures),
+      sanitizeJsonForPostgres(opportunity.requiredFields),
+      sanitizeJsonForPostgres(opportunity.availableFields),
+      sanitizeJsonForPostgres(opportunity.missingFields),
+      sanitizeJsonForPostgres(opportunity.recommendedDataSources),
+      sanitizeJsonForPostgres(opportunity.recommendedActions),
+      sanitizeJsonForPostgres(opportunity.evidenceSummary),
+      sanitizeJsonForPostgres(opportunity.warnings),
+      opportunity.userDecision ?? null,
+      opportunity.handoffId ?? null,
+      sanitizeJsonForPostgres(opportunity.createdDatasetIds),
+      opportunity.status,
+    ],
+  );
+  return mapAnalysisOpportunity(result.rows[0]);
+}
+
+export async function upsertAnalysisHandoff(handoff: AnalysisHandoff): Promise<AnalysisHandoff> {
+  const id = handoff.id ?? randomUUID();
+  const result = await getPool().query(
+    `
+      INSERT INTO analysis_handoffs (
+        id, opportunity_id, job_id, run_id, report_id, decision, target_page,
+        topic_id, dataset_ids, plan_id, allowed_operations, next_actions, warnings, lineage
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      ON CONFLICT (run_id) DO UPDATE SET
+        opportunity_id = EXCLUDED.opportunity_id,
+        report_id = EXCLUDED.report_id,
+        decision = EXCLUDED.decision,
+        target_page = EXCLUDED.target_page,
+        topic_id = EXCLUDED.topic_id,
+        dataset_ids = EXCLUDED.dataset_ids,
+        plan_id = EXCLUDED.plan_id,
+        allowed_operations = EXCLUDED.allowed_operations,
+        next_actions = EXCLUDED.next_actions,
+        warnings = EXCLUDED.warnings,
+        lineage = EXCLUDED.lineage,
+        updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      id,
+      handoff.opportunityId,
+      handoff.researchJobId ?? "",
+      handoff.researchRunId,
+      handoff.reportId ?? null,
+      handoff.decision,
+      handoff.targetPage,
+      handoff.topicId ?? null,
+      sanitizeJsonForPostgres(handoff.datasetIds),
+      handoff.planId ?? null,
+      sanitizeJsonForPostgres(handoff.allowedOperations),
+      sanitizeJsonForPostgres(handoff.nextActions),
+      sanitizeJsonForPostgres(handoff.warnings),
+      sanitizeJsonForPostgres(handoff.lineage),
+    ],
+  );
+  const saved = mapAnalysisHandoff(result.rows[0]);
+  await getPool().query(
+    `
+      UPDATE analysis_opportunities
+      SET user_decision = $2,
+          handoff_id = $3,
+          created_dataset_ids = $4,
+          status = 'decided',
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [
+      saved.opportunityId,
+      saved.decision,
+      saved.id,
+      sanitizeJsonForPostgres(saved.datasetIds),
+    ],
+  );
+  return saved;
+}
+
+export async function getAnalysisHandoffForRun(runId: string): Promise<AnalysisHandoff | null> {
+  const result = await getPool().query(
+    "SELECT * FROM analysis_handoffs WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [runId],
+  );
+  return result.rows[0] ? mapAnalysisHandoff(result.rows[0]) : null;
+}
+
 export async function addResearchReport(report: ResearchReport): Promise<ResearchReport> {
   const id = report.id ?? randomUUID();
   const result = await getPool().query(
@@ -1713,6 +1947,63 @@ function mapSourceProfile(row: any): SourceProfile {
   };
 }
 
+function mapAnalysisOpportunity(row: any): AnalysisOpportunity {
+  return {
+    id: row.id,
+    topic: row.topic,
+    researchRunId: row.run_id,
+    researchJobId: row.job_id,
+    reportId: row.report_id ?? undefined,
+    taskType: normalizeAnalysisOpportunityTaskType(row.task_type),
+    canEnterDataLab: Boolean(row.can_enter_datalab),
+    recommendedAnalysisMode: normalizeAnalysisOpportunityMode(row.recommended_analysis_mode),
+    score: Number(row.score ?? 0),
+    scoreBreakdown: normalizeScoreBreakdown(row.score_breakdown),
+    decisionReason: row.decision_reason ?? "",
+    candidateFeatures: normalizeStringArray(row.candidate_features),
+    requiredFields: normalizeStringArray(row.required_fields),
+    availableFields: normalizeStringArray(row.available_fields),
+    missingFields: normalizeStringArray(row.missing_fields),
+    recommendedDataSources: normalizeDataSources(row.recommended_data_sources),
+    recommendedActions: normalizeStringArray(row.recommended_actions),
+    evidenceSummary: normalizeEvidenceSummary(row.evidence_summary),
+    warnings: normalizeStringArray(row.warnings),
+    userDecision: row.user_decision ? normalizeAnalysisHandoffDecision(row.user_decision) : undefined,
+    handoffId: row.handoff_id ?? undefined,
+    createdDatasetIds: normalizeStringArray(row.created_dataset_ids),
+    status: normalizeAnalysisOpportunityStatus(row.status),
+    createdAt: row.created_at?.toISOString?.() ?? row.created_at ?? undefined,
+    updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at ?? undefined,
+  };
+}
+
+function mapAnalysisHandoff(row: any): AnalysisHandoff {
+  return {
+    id: row.id,
+    opportunityId: row.opportunity_id,
+    researchRunId: row.run_id,
+    researchJobId: row.job_id,
+    reportId: row.report_id ?? undefined,
+    decision: normalizeAnalysisHandoffDecision(row.decision),
+    targetPage: normalizeHandoffTargetPage(row.target_page),
+    topicId: row.topic_id ?? undefined,
+    datasetIds: normalizeStringArray(row.dataset_ids),
+    planId: row.plan_id ?? undefined,
+    allowedOperations: normalizeStringArray(row.allowed_operations),
+    nextActions: normalizeStringArray(row.next_actions),
+    warnings: normalizeStringArray(row.warnings),
+    lineage: {
+      runId: String(row.lineage?.runId ?? row.run_id),
+      jobId: row.lineage?.jobId ?? row.job_id ?? undefined,
+      reportId: row.lineage?.reportId ?? row.report_id ?? undefined,
+      sourceDatasetId: row.lineage?.sourceDatasetId ?? undefined,
+      opportunityId: row.lineage?.opportunityId ?? row.opportunity_id,
+    },
+    createdAt: row.created_at?.toISOString?.() ?? row.created_at ?? undefined,
+    updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at ?? undefined,
+  };
+}
+
 function mapResearchReport(row: any): ResearchReport {
   return {
     id: row.id,
@@ -1722,4 +2013,111 @@ function mapResearchReport(row: any): ResearchReport {
     markdown: row.markdown,
     generatedAt: row.generated_at?.toISOString?.() ?? row.generated_at ?? undefined,
   };
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item)).filter(Boolean);
+}
+
+function normalizeAnalysisHandoffDecision(value: unknown): AnalysisHandoffDecision {
+  return ["report_only", "light_analysis", "full_analysis", "continue_crawl"].includes(String(value))
+    ? String(value) as AnalysisHandoffDecision
+    : "report_only";
+}
+
+function normalizeAnalysisOpportunityMode(value: unknown): AnalysisOpportunityMode {
+  return ["report_only", "light_analysis", "full_analysis", "continue_crawl"].includes(String(value))
+    ? String(value) as AnalysisOpportunityMode
+    : "report_only";
+}
+
+function normalizeAnalysisOpportunityStatus(value: unknown): AnalysisOpportunityStatus {
+  return ["draft", "ready", "decided", "failed"].includes(String(value))
+    ? String(value) as AnalysisOpportunityStatus
+    : "draft";
+}
+
+function normalizeAnalysisOpportunityTaskType(value: unknown): AnalysisOpportunityTaskType {
+  const normalized = String(value ?? "unknown");
+  const allowed = new Set([
+    "survey",
+    "verification",
+    "tool-evaluation",
+    "policy",
+    "technical",
+    "competitive",
+    "monitoring",
+    "data-research",
+    "sports-analysis",
+    "analytics",
+    "market-research",
+    "product-comparison",
+    "news-trace",
+    "unknown",
+  ]);
+  return allowed.has(normalized) ? normalized as AnalysisOpportunityTaskType : "unknown";
+}
+
+function normalizeHandoffTargetPage(value: unknown): AnalysisHandoff["targetPage"] {
+  return ["research-report", "research-discovery", "sources", "wizard"].includes(String(value))
+    ? String(value) as AnalysisHandoff["targetPage"]
+    : "research-report";
+}
+
+function normalizeScoreBreakdown(value: unknown): AnalysisOpportunityScoreBreakdown {
+  const source = value && typeof value === "object" ? value as Partial<AnalysisOpportunityScoreBreakdown> : {};
+  const weights = source.weights && typeof source.weights === "object" ? source.weights : undefined;
+  const normalizedWeights = {
+    structuredFieldDensity: Number(weights?.structuredFieldDensity ?? 0.2),
+    dimensionRichness: Number(weights?.dimensionRichness ?? 0.18),
+    sourceQuality: Number(weights?.sourceQuality ?? 0.2),
+    evidenceCoverage: Number(weights?.evidenceCoverage ?? 0.16),
+    analysisValue: Number(weights?.analysisValue ?? 0.16),
+    topicFit: Number(weights?.topicFit ?? 0.1),
+  };
+  return {
+    structuredFieldDensity: clampScore(source.structuredFieldDensity),
+    dimensionRichness: clampScore(source.dimensionRichness),
+    sourceQuality: clampScore(source.sourceQuality),
+    evidenceCoverage: clampScore(source.evidenceCoverage),
+    analysisValue: clampScore(source.analysisValue),
+    topicFit: clampScore(source.topicFit),
+    weights: normalizedWeights,
+    finalScore: clampScore(source.finalScore),
+  };
+}
+
+function normalizeDataSources(value: unknown): AnalysisOpportunityDataSource[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const source = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return {
+      kind: String(source.kind ?? "unknown"),
+      url: source.url ? String(source.url) : undefined,
+      title: source.title ? String(source.title) : undefined,
+      reason: String(source.reason ?? ""),
+      provider: source.provider ? String(source.provider) : undefined,
+      sourceType: source.sourceType ? String(source.sourceType) as SourceType : undefined,
+      qualityScore: Number.isFinite(Number(source.qualityScore)) ? Number(source.qualityScore) : undefined,
+    };
+  }).filter((item) => item.kind || item.reason);
+}
+
+function normalizeEvidenceSummary(value: unknown): AnalysisOpportunityEvidenceSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const source = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return {
+      claim: source.claim ? String(source.claim) : undefined,
+      sourceUrl: source.sourceUrl ? String(source.sourceUrl) : undefined,
+      support: String(source.support ?? ""),
+      documentId: source.documentId ? String(source.documentId) : undefined,
+    };
+  }).filter((item) => item.support);
+}
+
+function clampScore(value: unknown) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : 0;
 }
