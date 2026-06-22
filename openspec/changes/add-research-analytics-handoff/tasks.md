@@ -12,7 +12,7 @@
 - [x] 2.2 Ensure `report_only` records the decision without creating analytics datasets or worker jobs.
 - [x] 2.3 Ensure `light_analysis` creates or reuses a Research data-source registry or lightweight dataset and records allowed operations as profile, stats, and basic charts.
 - [x] 2.4 Ensure `full_analysis` creates or reuses source registry context and creates topic/plan metadata for Data Lab wizard entry.
-- [ ] 2.5 Ensure `continue_crawl` creates follow-up planned queries from missing fields and recommended data sources without losing existing run lineage.
+- [x] 2.5 Ensure `continue_crawl` creates follow-up planned queries from missing fields and recommended data sources without losing existing run lineage.
 
 ## 3. Analytics Planning and Data Lab Backend
 

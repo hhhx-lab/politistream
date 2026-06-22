@@ -931,6 +931,16 @@ function testAnalysisFullHandoffCarriesWizardMetadata() {
   assert.ok(routesSource.includes('topicId: topicIdForHandoffDecision(input.decision, input.job.id)'), "full-analysis handoff should carry a stable topic id");
 }
 
+function testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('if (input.decision === "continue_crawl")'), "continue-crawl handoff should have an explicit branch");
+  assert.ok(routesSource.includes("appendContinueCrawlQueries"), "continue-crawl handoff should append follow-up planned queries");
+  assert.ok(routesSource.includes('updateResearchRunStatus(input.run.id, "queued", "discovery")'), "continue-crawl handoff should send the run back to discovery");
+  assert.ok(routesSource.includes('enqueueResearchStage({ runId: input.run.id, jobId: input.job.id, stage: "discovery"'), "continue-crawl handoff should enqueue discovery");
+  assert.ok(routesSource.includes('if (run.status === "cancelled") return res.status(409)'), "cancelled runs should be rejected safely");
+}
+
 async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
   const result = await runProviderLiveSmoke({
     topic: "document conversion tools",
@@ -1169,6 +1179,7 @@ testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets();
 testResearchCapabilityAuditApiAndUiAreWired();
 testAnalysisReportOnlyHandoffStaysSideEffectFree();
 testAnalysisFullHandoffCarriesWizardMetadata();
+testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery();
 await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();
 testPressureSmokeExposesStandardAndDeepBudgets();
 await testDataSourceLiveSmokeUsesPublicDiscoveryProviders();
