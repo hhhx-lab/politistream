@@ -994,6 +994,7 @@ function targetPageForHandoffDecision(decision: AnalysisHandoffDecision): Analys
   if (decision === "report_only") return "research-report";
   if (decision === "continue_crawl") return "research-discovery";
   if (decision === "light_analysis") return "sources";
+  if (decision === "full_analysis") return "wizard";
   return "wizard";
 }
 

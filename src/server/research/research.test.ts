@@ -923,6 +923,14 @@ function testAnalysisReportOnlyHandoffStaysSideEffectFree() {
   assert.ok(routesSource.includes('message: "已记录 Research 到 Data Lab 的分析交接决策。"'), "handoff route should persist the report-only decision as a run event");
 }
 
+function testAnalysisFullHandoffCarriesWizardMetadata() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('if (decision === "full_analysis") return "wizard";'), "full-analysis handoff should target the Data Lab wizard");
+  assert.ok(routesSource.includes('planId: planIdForHandoffDecision(input.decision, input.opportunity.id)'), "full-analysis handoff should carry a stable plan id");
+  assert.ok(routesSource.includes('topicId: topicIdForHandoffDecision(input.decision, input.job.id)'), "full-analysis handoff should carry a stable topic id");
+}
+
 async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
   const result = await runProviderLiveSmoke({
     topic: "document conversion tools",
@@ -1160,6 +1168,7 @@ testFrontierScoreExplainabilityIsPersistedAndVisible();
 testResearchCapabilityAuditSurfacesRealReadinessAndPressureTargets();
 testResearchCapabilityAuditApiAndUiAreWired();
 testAnalysisReportOnlyHandoffStaysSideEffectFree();
+testAnalysisFullHandoffCarriesWizardMetadata();
 await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();
 testPressureSmokeExposesStandardAndDeepBudgets();
 await testDataSourceLiveSmokeUsesPublicDiscoveryProviders();
