@@ -450,6 +450,21 @@ function testDataLabSurfacesAdvancedTools() {
   assert.ok(smokeSource.includes("刷新数据源快照"), "Playwright smoke should assert materialized source refresh controls");
   assert.ok(smokeSource.includes("数据源快照已刷新"), "Playwright smoke should assert materialized source refresh feedback");
   assert.ok(smokeSource.includes("数据源快照已导入"), "Playwright smoke should assert data source materialization feedback");
+  assert.ok(source.includes("/api/analytics/handoffs/research-run/${runId}"), "Data Lab should load Research handoff context by run id");
+  assert.ok(source.includes("Research 分析交接"), "Data Lab should render the handoff context panel");
+  assert.ok(source.includes("handoffContext"), "Data Lab should store focused handoff context");
+  assert.ok(source.includes("handoffQuestions"), "Data Lab should surface planned analysis questions");
+  assert.ok(source.includes("handoffMethods"), "Data Lab should surface recommended methods");
+  assert.ok(smokeSource.includes("/api/analytics/handoffs/research-run/smoke-run"), "Playwright smoke should mock Research handoff context loading");
+  assert.ok(smokeSource.includes("Research 分析交接"), "Playwright smoke should assert the Data Lab handoff panel");
+  assert.ok(smokeSource.includes("当前分析计划"), "Playwright smoke should assert the Data Lab analysis plan panel");
+
+  const wizardSource = readFileSync("src/components/data-lab/DataLabAnalysisWizard.tsx", "utf-8");
+  assert.ok(wizardSource.includes("当前分析计划"), "Data Lab wizard should render the handoff analysis plan");
+  assert.ok(wizardSource.includes("recommendedMethods"), "Data Lab wizard should show recommended methods from the backend plan");
+  assert.ok(wizardSource.includes("recommendedCharts"), "Data Lab wizard should show recommended charts from the backend plan");
+  assert.ok(wizardSource.includes("fieldCoverage"), "Data Lab wizard should show field coverage from the backend plan");
+  assert.ok(wizardSource.includes("uniqueAnalyticsJobKinds"), "Data Lab wizard should restrict its default run chain to allowed plan methods when present");
 }
 
 function testResearchDataSourceRows() {

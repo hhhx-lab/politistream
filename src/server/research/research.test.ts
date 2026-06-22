@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { normalizeRSSSourceUrl } from "../db";
 import { getResearchConfigStatus, resolveAiModel, resolveAiProvider } from "./config";
+import { buildAnalysisOpportunity } from "./analysisOpportunity";
 import { normalizeResearchBudget, createRunBudgetState, canAcceptUrlForRun, recordAcceptedUrl } from "./budget";
 import { createCommonCrawlDiscoveryProvider, createDefaultDiscoveryProviders, createGdeltDiscoveryProvider, createRSSDiscoveryProvider, normalizeDiscoveredCandidate } from "./discovery/registry";
 import { runEnhancedFetchSmoke } from "./evaluation/enhancedFetchSmoke";
@@ -941,6 +942,114 @@ function testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery() {
   assert.ok(routesSource.includes('if (run.status === "cancelled") return res.status(409)'), "cancelled runs should be rejected safely");
 }
 
+function testAnalysisOpportunityRecommendationsByTopicType() {
+  const now = "2026-06-22T00:00:00.000Z";
+  const baseRun = {
+    id: "run-opportunity",
+    jobId: "job-opportunity",
+    status: "completed",
+    stage: "completed",
+    budget: normalizeResearchBudget(),
+    createdAt: now,
+    updatedAt: now,
+  } as const;
+  const marketJob = {
+    id: "job-market",
+    topic: "全国避孕套市场 地区 销量 营收 渠道 品牌 购买率 出生率",
+    seedUrls: [] as string[],
+    status: "active",
+    budget: normalizeResearchBudget(),
+    constraints: {},
+    queryPlan: [] as string[],
+    createdAt: now,
+    updatedAt: now,
+  } as const;
+  const marketOpportunity = buildAnalysisOpportunity({
+    job: marketJob,
+    run: { ...baseRun, id: "run-market", jobId: marketJob.id },
+    report: { jobId: marketJob.id, runId: "run-market", status: "ready", markdown: "region revenue sales channel brand purchase_rate birth_rate age_group market_size", generatedAt: now },
+    documents: [{
+      id: "doc-market",
+      jobId: marketJob.id,
+      runId: "run-market",
+      url: "https://data.example/market.csv",
+      canonicalUrl: "https://data.example/market.csv",
+      domain: "data.example",
+      contentText: "year region revenue sales channel brand purchase_rate birth_rate age_group market_size",
+      depth: 0,
+      status: "fetched",
+    }],
+    tables: [{
+      id: "table-market",
+      jobId: marketJob.id,
+      runId: "run-market",
+      documentId: "doc-market",
+      tableIndex: 0,
+      caption: "market data",
+      headers: ["year", "region", "revenue", "sales", "channel", "brand", "purchase_rate", "birth_rate"],
+      rows: [["2026", "华东", "100", "20", "电商", "A", "0.3", "6.1"]],
+    }],
+    assets: [{ url: "https://data.example/market.csv", assetType: "json", metadata: { fields: ["region", "revenue"] } }],
+    candidates: [],
+    frontier: [{
+      id: "frontier-market",
+      jobId: marketJob.id,
+      runId: "run-market",
+      url: "https://data.example/market.csv",
+      canonicalUrl: "https://data.example/market.csv",
+      depth: 0,
+      sourceType: "data-catalog",
+      priorityScore: 0.94,
+      status: "fetched",
+      attempts: 1,
+      reason: "official market dataset",
+    }],
+    providers: [{ jobId: marketJob.id, runId: "run-market", provider: "ckan", providerType: "data-catalog", candidateCount: 1, durationMs: 1, costUnits: 0 }],
+    evidence: [],
+    claims: [],
+    sourceProfiles: [],
+  });
+
+  assert.equal(marketOpportunity.taskType, "market-research");
+  assert.equal(marketOpportunity.recommendedAnalysisMode, "full_analysis");
+  assert.ok(marketOpportunity.canEnterDataLab);
+  assert.ok(marketOpportunity.recommendedDataSources.some((source) => source.sourceType === "data-catalog"));
+  assert.ok(marketOpportunity.createdDatasetIds.length === 0, "opportunity generation should not create analytics datasets");
+
+  const toolJob = {
+    ...marketJob,
+    id: "job-tools",
+    topic: "好用的文档编辑工具 Markdown DOCX PDF 对比 价格 license GitHub",
+  };
+  const toolOpportunity = buildAnalysisOpportunity({
+    job: toolJob,
+    run: { ...baseRun, id: "run-tools", jobId: toolJob.id },
+    report: { jobId: toolJob.id, runId: "run-tools", status: "ready", markdown: "Pandoc LibreOffice Typora pricing license GitHub stars feature comparison", generatedAt: now },
+    documents: [{
+      id: "doc-tools",
+      jobId: toolJob.id,
+      runId: "run-tools",
+      url: "https://pandoc.org/",
+      canonicalUrl: "https://pandoc.org/",
+      domain: "pandoc.org",
+      contentText: "Pandoc feature license GitHub stars release_date price",
+      depth: 0,
+      status: "fetched",
+    }],
+    tables: [],
+    assets: [],
+    candidates: [],
+    frontier: [],
+    providers: [{ jobId: toolJob.id, runId: "run-tools", provider: "github", providerType: "github", candidateCount: 1, durationMs: 1, costUnits: 0 }],
+    evidence: [],
+    claims: [],
+    sourceProfiles: [],
+  });
+
+  assert.equal(toolOpportunity.taskType, "product-comparison");
+  assert.ok(["report_only", "light_analysis"].includes(toolOpportunity.recommendedAnalysisMode), "tool comparison should not be forced into full analysis");
+}
+
 function testResearchAnalysisDecisionUiIsWired() {
   const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
   const decisionSource = readFileSync(new URL("../../components/research/AnalysisDecisionPanel.tsx", import.meta.url), "utf8");
@@ -1204,6 +1313,7 @@ testResearchCapabilityAuditApiAndUiAreWired();
 testAnalysisReportOnlyHandoffStaysSideEffectFree();
 testAnalysisFullHandoffCarriesWizardMetadata();
 testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery();
+testAnalysisOpportunityRecommendationsByTopicType();
 testResearchAnalysisDecisionUiIsWired();
 testResearchAnalysisDecisionUiStatesAreWired();
 await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();

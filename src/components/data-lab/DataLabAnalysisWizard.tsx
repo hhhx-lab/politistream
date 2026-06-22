@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart3,
   BrainCircuit,
+  CheckCircle2,
   Download,
   FlaskConical,
   GitBranch,
@@ -12,6 +13,7 @@ import {
   Rows3,
   Sparkles,
   TableProperties,
+  XCircle,
 } from 'lucide-react';
 import {
   AnalyticsDatasetSummary,
@@ -66,9 +68,48 @@ interface DataLabAnalysisWizardProps {
   dataset?: AnalyticsDatasetSummary;
   profile: DatasetProfileSummary | null;
   suggestions: VisualizationSuggestionSummary[];
+  handoffContext?: DataLabHandoffContextSummary | null;
   busyKind: string;
   onRunAnalysis: (kind: AnalyticsJobKindSummary) => void;
   onRenderVisualization: (suggestion?: VisualizationSuggestionSummary) => void;
+}
+
+export interface DataLabHandoffContextSummary {
+  opportunity?: {
+    topic?: string;
+    recommendedAnalysisMode?: string;
+    score?: number;
+    candidateFeatures?: string[];
+    requiredFields?: string[];
+    availableFields?: string[];
+    missingFields?: string[];
+    recommendedActions?: string[];
+    warnings?: string[];
+  };
+  handoff?: {
+    decision?: string;
+    allowedOperations?: string[];
+    nextActions?: string[];
+    warnings?: string[];
+  };
+  plan?: {
+    id?: string;
+    topic?: string;
+    mode?: string;
+    questions?: Array<{ id?: string; title?: string; rationale?: string; priority?: number }>;
+    candidateVariables?: string[];
+    fieldCoverage?: {
+      requiredFields?: string[];
+      availableFields?: string[];
+      missingFields?: string[];
+      coverageRatio?: number;
+    };
+    recommendedMethods?: Array<{ id?: string; title?: string; kind?: string; allowed?: boolean; reason?: string; disabledReason?: string }>;
+    recommendedCharts?: Array<{ id?: string; title?: string; kind?: string; description?: string; allowed?: boolean }>;
+    risks?: string[];
+    nextActions?: string[];
+    restrictions?: string[];
+  };
 }
 
 interface WizardTemplate {
@@ -91,11 +132,14 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
   dataset,
   profile,
   suggestions,
+  handoffContext,
   busyKind,
   onRunAnalysis,
   onRenderVisualization,
 }) => {
   const templates = useMemo(() => buildWizardTemplates(language), [language]);
+  const plan = handoffContext?.plan;
+  const planCopy = wizardPlanCopy(language);
   const [templateId, setTemplateId] = useState<WizardTemplateId>('explore');
   const [question, setQuestion] = useState('');
   const [fieldSelections, setFieldSelections] = useState<Record<(typeof WIZARD_FIELDS)[number], string>>({
@@ -114,11 +158,15 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
     suggestion.x === suggestedGroup || suggestion.y === suggestedTarget || suggestion.title.includes(suggestedTarget)
   )) ?? suggestions[0];
 
-  const recommended = recommendWizardMethods(selectedTemplate, {
+  const planRecommendedKinds = uniqueAnalyticsJobKinds((plan?.recommendedMethods ?? [])
+    .filter((method) => method.allowed !== false)
+    .map((method) => method.kind));
+  const recommended = planRecommendedKinds.length > 0 ? planRecommendedKinds : recommendWizardMethods(selectedTemplate, {
     hasNumeric: numericColumns.length > 0,
     hasCategorical: categoricalColumns.length > 0,
     hasTime: columns.some((column) => column.inferredType === 'date' || /date|time|year|month|day/i.test(column.name)),
   });
+  const primaryKind = recommended[0] ?? selectedTemplate.primary;
 
   const runChain = async () => {
     for (const kind of recommended) {
@@ -182,17 +230,17 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
                   <input
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
-                    placeholder={copy.wizardQuestionPlaceholder}
+                    placeholder={plan?.questions?.[0]?.title ?? copy.wizardQuestionPlaceholder}
                     className="w-full border border-stone-300 px-3 py-2 text-sm outline-none focus:border-[#151515]"
                   />
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => onRunAnalysis(selectedTemplate.primary)}
-                    disabled={!dataset || busyKind === selectedTemplate.primary}
+                    onClick={() => onRunAnalysis(primaryKind)}
+                    disabled={!dataset || busyKind === primaryKind}
                     className="inline-flex min-h-10 items-center justify-center gap-2 border-2 border-[#151515] bg-[#151515] px-3 py-2 font-mono text-[10px] uppercase text-white disabled:opacity-50"
                   >
-                    {busyKind === selectedTemplate.primary ? <Activity size={13} className="animate-spin" /> : <Play size={13} />}
+                    {busyKind === primaryKind ? <Activity size={13} className="animate-spin" /> : <Play size={13} />}
                     {copy.wizardRunPrimary}
                   </button>
                   <button
@@ -228,6 +276,8 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
             </div>
 
             <div className="min-w-0 space-y-3">
+              {plan && <HandoffPlanPanel plan={plan} copy={planCopy} />}
+
               <div className="border border-stone-300 bg-[#FFFCF4] p-3">
                 <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.wizardMethodChain}</div>
                 <div className="space-y-2">
@@ -395,6 +445,39 @@ function recommendWizardMethods(template: WizardTemplate, signals: { hasNumeric:
   return chain;
 }
 
+function uniqueAnalyticsJobKinds(kinds: string[]) {
+  return Array.from(new Set(kinds.filter(isAnalyticsJobKind)));
+}
+
+function isAnalyticsJobKind(kind: string): kind is AnalyticsJobKindSummary {
+  return [
+    'profile',
+    'descriptive-statistics',
+    'quality-report',
+    'frequency-tables',
+    'crosstab',
+    'statistical-tests',
+    'linear-regression',
+    'logistic-regression',
+    'poisson-regression',
+    'dimensionality-reduction',
+    'cluster-analysis',
+    'anomaly-detection',
+    'time-series-analysis',
+    'data-transformation',
+    'data-cleaning',
+    'news-organization',
+    'text-analysis',
+    'model-explanation',
+    'deep-learning-analysis',
+    'geospatial-analysis',
+    'publication-chart',
+    'report-draft',
+    'export-report',
+    'visualization-render',
+  ].includes(kind);
+}
+
 function inferColumnsFromDataset(dataset?: AnalyticsDatasetSummary): DatasetProfileSummary['columns'] {
   const sample = dataset?.sampleRows?.[0];
   if (!sample) return [];
@@ -429,3 +512,113 @@ const WizardMetric: React.FC<{ label: string; value: string | number }> = ({ lab
     <div className="mt-1 truncate font-serif text-lg">{value}</div>
   </div>
 );
+
+const HandoffPlanPanel: React.FC<{
+  plan: NonNullable<DataLabHandoffContextSummary['plan']>;
+  copy: ReturnType<typeof wizardPlanCopy>;
+}> = ({ plan, copy }) => {
+  const coverage = plan.fieldCoverage ?? { requiredFields: [], availableFields: [], missingFields: [], coverageRatio: 0 };
+  const planMode = plan.mode ?? 'light_analysis';
+  return (
+    <section className="border border-[#6C4AB6] bg-[#F0ECFF] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-wider text-[#6C4AB6]">{copy.title}</div>
+          <div className="mt-1 font-serif text-xl">{plan.topic ?? '-'}</div>
+        </div>
+        <span className="border border-[#6C4AB6] bg-white px-2 py-1 font-mono text-[10px] uppercase text-[#6C4AB6]">
+          {copy.mode}: {planMode}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <WizardMetric label={copy.coverage} value={`${Math.round((coverage.coverageRatio ?? 0) * 100)}%`} />
+        <WizardMetric label={copy.questions} value={plan.questions?.length ?? 0} />
+        <WizardMetric label={copy.methods} value={plan.recommendedMethods?.length ?? 0} />
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <SimpleList title={copy.requiredFields} items={coverage.requiredFields ?? []} />
+        <SimpleList title={copy.missingFields} items={coverage.missingFields ?? []} />
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <SimpleList
+          title={copy.recommendedQuestions}
+          items={(plan.questions ?? []).map((question) => `${question.title}${question.rationale ? ` · ${question.rationale}` : ''}`)}
+        />
+        <SimpleList
+          title={copy.recommendedCharts}
+          items={(plan.recommendedCharts ?? []).map((chart) => `${chart.title} · ${chart.kind}${chart.allowed === false ? ` · ${copy.blocked}` : ''}`)}
+        />
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <SimpleList
+          title={copy.recommendedMethods}
+          items={(plan.recommendedMethods ?? []).map((method) => `${method.title} · ${method.kind}${method.allowed === false ? ` · ${copy.blocked}${method.disabledReason ? ` (${method.disabledReason})` : ''}` : ''}`)}
+        />
+        <SimpleList title={copy.restrictions} items={plan.restrictions ?? []} />
+      </div>
+      {plan.risks?.length ? (
+        <div className="mt-3 border border-[#B9472A] bg-white p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-[#B9472A]">{copy.risks}</div>
+          <ul className="space-y-1 text-xs leading-5 text-stone-700">
+            {plan.risks.map((risk) => (
+              <li key={risk} className="flex items-start gap-2">
+                <XCircle size={12} className="mt-0.5 shrink-0 text-[#B9472A]" />
+                <span>{risk}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {plan.nextActions?.length ? (
+        <div className="mt-3 border border-emerald-300 bg-white p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-emerald-800">{copy.nextActions}</div>
+          <ul className="space-y-1 text-xs leading-5 text-stone-700">
+            {plan.nextActions.map((item) => (
+              <li key={item} className="flex items-start gap-2">
+                <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-emerald-700" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
+const SimpleList: React.FC<{ title: string; items: string[] }> = ({ title, items }) => (
+  <div className="border border-stone-300 bg-white p-3">
+    <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{title}</div>
+    {items.length > 0 ? (
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <span key={item} className="max-w-full border border-stone-300 bg-stone-50 px-2 py-1 text-[11px] leading-5 text-stone-700">
+            {item}
+          </span>
+        ))}
+      </div>
+    ) : (
+      <div className="text-xs text-stone-500">-</div>
+    )}
+  </div>
+);
+
+function wizardPlanCopy(language: Language) {
+  const zh = language === 'zh';
+  return {
+    title: zh ? '当前分析计划' : 'Current analysis plan',
+    mode: zh ? '模式' : 'Mode',
+    coverage: zh ? '字段覆盖' : 'Coverage',
+    questions: zh ? '问题数' : 'Questions',
+    methods: zh ? '方法数' : 'Methods',
+    requiredFields: zh ? '必需字段' : 'Required fields',
+    missingFields: zh ? '缺失字段' : 'Missing fields',
+    recommendedQuestions: zh ? '推荐问题' : 'Recommended questions',
+    recommendedMethods: zh ? '推荐方法' : 'Recommended methods',
+    recommendedCharts: zh ? '推荐图表' : 'Recommended charts',
+    restrictions: zh ? '限制' : 'Restrictions',
+    risks: zh ? '风险提示' : 'Risks',
+    nextActions: zh ? '下一步动作' : 'Next actions',
+    blocked: zh ? '暂不运行' : 'blocked',
+  };
+}

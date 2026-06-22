@@ -52,8 +52,8 @@ The current project is best classified as a **web application** with two strong 
 | Priority frontier | Scores and queues URLs by relevance, authority, original-source probability, freshness, diversity, and link context | `src/server/research/frontier/queue.ts` |
 | Worker lifecycle | Runs research through discovery, frontier, fetch, extract, analyze, and report stages with Redis/BullMQ | `src/server/research/workers/worker.ts` |
 | Multi-content extraction | Extracts HTML, PDF text, structured tables, links, assets, and metadata | `src/server/research/extractors/*` |
-| Source explorer | Shows documents, excerpts, diagnostics, assets, tables, links, failure reasons, and claim references | `src/components/research/SourceExplorerPanel.tsx` |
-| Evidence graph | Stores claims, evidence, source profiles, credibility signals, and relations | `src/server/research/evidence/graph.ts` |
+| Source explorer | Shows documents, reading path, diagnostics, assets, tables, links, failure reasons, and claim references | `src/components/research/SourceExplorerPanel.tsx` |
+| Evidence Graph | Stores claims, evidence, source profiles, credibility signals, and relations | `src/server/research/evidence/graph.ts` |
 | Data Lab | Profiles datasets, materializes research data sources, runs analytics jobs, renders charts, and saves artifacts | `src/server/analytics/*`, `src/components/DataLab.tsx` |
 | Agent console | Routes natural language tasks into Research, Analytics, and Visualization actions | `src/server/agent/routes.ts`, `src/components/AgentConsole.tsx` |
 | Bilingual UI | Defaults to Simplified Chinese UI and supports one-click English switching | `src/i18n.ts` |
@@ -96,6 +96,8 @@ Simplified Chinese report + Source Explorer + Data Lab export
 | RSS Monitoring | Add, disable, refresh, and inspect RSS feeds |
 | Saved Library | Keep important news items |
 | AI Work Queue | Process news items that still need AI summaries |
+
+The Research provider panel also exposes data source coverage (数据源覆盖), so data-catalog, structured-api, competition-data, and sports-data candidates are not hidden behind a generic provider count. The Frontier view includes Frontier 评分解释 with fixed scoring weights: 主题相关度 25%, source authority 25%, original-source probability 20%, freshness 10%, source diversity 10%, and link-context quality 10%.
 
 ## Quick Start
 
@@ -245,10 +247,14 @@ Key endpoints:
 | `GET` | `/api/research/runs/:runId/events` | Run timeline events |
 | `GET` | `/api/research/runs/:runId/frontier` | Frontier items and scores |
 | `GET` | `/api/research/runs/:runId/documents` | Crawled documents and excerpts |
+| `GET` | `/api/research/runs/:runId/links` | Discovered links and their source documents |
 | `GET` | `/api/research/runs/:runId/search?q=` | Full-text search within run documents |
 | `GET` | `/api/research/runs/:runId/evidence` | Claims and evidence |
+| `GET` | `/api/research/runs/:runId/claims` | Claim index and status summary |
 | `GET` | `/api/research/runs/:runId/graph` | Evidence graph |
 | `GET` | `/api/research/runs/:runId/providers` | Provider call records |
+| `POST` | `/api/research/runs/:runId/queries` | Append manual queries to a run |
+| `POST` | `/api/research/runs/:runId/retry-failed` | Retry failed frontier items |
 | `POST` | `/api/analytics/datasets/from-research-run/:runId/data-sources` | Export research data-source candidates to Data Lab |
 | `POST` | `/api/analytics/datasets/:id/materialize-source` | Fetch one data source into a dataset |
 | `POST` | `/api/analytics/datasets/:id/analyze` | Run a Data Lab analysis job |
@@ -356,6 +362,21 @@ npm run test
 | Data Lab worker features are missing | Check `workers-analytics/.venv` and `ANALYTICS_PYTHON_BIN` |
 | Source Explorer has no documents | The run may not have reached fetch/extract, or frontier items may have failed |
 | Evidence graph is sparse | The run needs extracted document text and a successful analyze/report stage |
+
+## Runtime Monitoring (运行监控)
+
+The Research workspace includes a run monitoring surface that shows:
+
+- the current pipeline stage;
+- query planning progress;
+- provider calls and errors;
+- frontier state and scoring;
+- document fetch status;
+- reading path (读取路径) and diagnostics;
+- evidence graph and claim coverage;
+- final report readiness.
+
+This is the part of the app you should trust when you want to know whether a run is actually doing work or only showing a polished shell.
 
 ## Boundaries
 

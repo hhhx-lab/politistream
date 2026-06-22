@@ -67,13 +67,41 @@ except Exception:  # pragma: no cover
     accuracy_score = None
     silhouette_score = None
 
+
+def _configure_matplotlib_fonts() -> None:
+    if plt is None:
+        return
+    try:
+        available_names = {font.name for font in font_manager.fontManager.ttflist}
+        preferred = [
+            "PingFang SC",
+            "Hiragino Sans GB",
+            "STHeiti",
+            "Songti SC",
+            "Arial Unicode MS",
+            "Noto Sans CJK SC",
+            "Noto Sans SC",
+            "SimHei",
+            "SimSun",
+            "DejaVu Sans",
+        ]
+        chosen = next((name for name in preferred if name in available_names), "DejaVu Sans")
+        matplotlib.rcParams["font.sans-serif"] = [chosen, "DejaVu Sans"]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+    except Exception:
+        matplotlib.rcParams["axes.unicode_minus"] = False
+
+
 try:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import matplotlib.font_manager as font_manager
+    _configure_matplotlib_fonts()
 except Exception:  # pragma: no cover
     plt = None
+    font_manager = None
 
 try:
     import plotly.graph_objects as go
@@ -925,7 +953,7 @@ def publication_chart(rows: list[dict[str, Any]]) -> dict[str, Any]:
             ax.set_ylabel("Count")
         else:
             ax.text(0.5, 0.5, "No numeric data", ha="center", va="center")
-        ax.set_title("PolitiStream Publication Chart")
+        ax.set_title("PolitiStream 论文图表")
         ax.grid(True, alpha=0.25)
         fig.tight_layout()
         for ext in ("png", "svg", "pdf"):

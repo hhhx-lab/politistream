@@ -26,12 +26,12 @@
 - [x] 4.1 Add `AnalysisDecisionPanel` to the Research run results surface with topic type, score, candidate features, data assets, recommendation, and actions.
 - [x] 4.2 Add `AnalysisOpportunityDrawer` to show score breakdown, evidence URLs, available fields, missing fields, source recommendations, and warnings.
 - [x] 4.3 Wire Research UI actions for report-only, lightweight analysis, full analysis, continue crawling, loading, success, and error states.
-- [ ] 4.4 Update Data Lab focus/context handling so handoff routes open `sources` or `wizard` with topic, run id, report id, recommended mode, candidate features, missing fields, and source registry context.
-- [ ] 4.5 Update Data Lab wizard/context UI to show field coverage, recommended methods, recommended charts, risks, and lightweight-mode restrictions.
+- [x] 4.4 Update Data Lab focus/context handling so handoff routes open `sources` or `wizard` with topic, run id, report id, recommended mode, candidate features, missing fields, and source registry context.
+- [x] 4.5 Update Data Lab wizard/context UI to show field coverage, recommended methods, recommended charts, risks, and lightweight-mode restrictions.
 
 ## 5. Verification
 
-- [ ] 5.1 Add Research backend tests for market-topic full-analysis recommendation, tool-comparison report/light recommendation, no-side-effect opportunity generation, and all handoff decisions.
-- [ ] 5.2 Add Analytics backend tests for handoff metadata, lightweight restrictions, source registry reuse, plan generation, and lineage preservation.
-- [ ] 5.3 Add frontend or component-level tests/smoke assertions that Research shows the decision panel and Data Lab opens with handoff context.
-- [ ] 5.4 Run `npm run test:research`, `npm run test:analytics`, `npm run build`, and Playwright/manual scenarios for market research, tool comparison, report-only, light analysis, full analysis, and continue-crawl flows.
+- [x] 5.1 Add Research backend tests for market-topic full-analysis recommendation, tool-comparison report/light recommendation, no-side-effect opportunity generation, and all handoff decisions.
+- [x] 5.2 Add Analytics backend tests for handoff metadata, lightweight restrictions, source registry reuse, plan generation, and lineage preservation.
+- [x] 5.3 Add frontend or component-level tests/smoke assertions that Research shows the decision panel and Data Lab opens with handoff context.
+- [x] 5.4 Run `npm run test:research`, `npm run test:analytics`, `npm run build`, and Playwright/manual scenarios for market research, tool comparison, report-only, light analysis, full analysis, and continue-crawl flows.

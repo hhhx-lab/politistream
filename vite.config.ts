@@ -19,6 +19,14 @@ export default defineConfig(({mode}) => {
       host: '0.0.0.0',
       port: frontendPort,
       hmr: process.env.DISABLE_HMR !== 'true',
+      watch: {
+        ignored: [
+          '**/.data/**',
+          '**/archives/**',
+          '**/news.db',
+          '**/news.db-*',
+        ],
+      },
       proxy: {
         '/api': {
           target: apiTarget,

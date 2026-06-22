@@ -356,7 +356,7 @@ function topicSpecificQueryExpansions(
       add(`${topicSubject} 电商 平台 销售 渠道 药店 便利店`, "overview", ["company", "mainstream-news", "dataset"], 87);
     } else if (dimension === "品牌竞争" || dimension === "品牌/竞品") {
       add(`${topicSubject} 品牌 份额 价格带 竞品`, "overview", ["company", "mainstream-news", "benchmark"], 86);
-    } else if (dimension === "数据口径与可验证性" || dimension === "数据源") {
+    } else if ((dimension === "数据口径与可验证性" || dimension === "数据源") && shouldAddDataSourceExpansion(topic, taskType, explicitDimensions)) {
       add(`${topicKeywords} 数据源 统计口径 原始数据 报告`, "dataset-discovery", ["dataset", "data-catalog", "official"], 89);
     } else if (dimension === "可视化输出") {
       add(`${topicKeywords} 可视化 统计图 时间序列 地图 相关性`, "visualization", ["dataset", "benchmark"], 70);
@@ -367,12 +367,27 @@ function topicSpecificQueryExpansions(
     add(`${topicSubject} market size report China`, "overview", ["mainstream-news", "academic", "company"], 84);
     add(`${topicKeywords} 行业报告 市场规模 消费者 调研`, "overview", ["mainstream-news", "academic", "company"], 85);
   }
-  if (/[\u4e00-\u9fff]/.test(topic)) {
+  if (/[\u4e00-\u9fff]/.test(topic) && shouldAddChinaStatisticsExpansion(topic, taskType, explicitDimensions)) {
     add(`${topicSubject} 国家统计局 人口 出生率`, "statistical-source", ["official", "structured-api"], 83);
     add(`${topicKeywords} 艾媒 咨询 行业 报告 消费者`, "overview", ["mainstream-news", "company"], 76);
   }
 
   return rows;
+}
+
+function shouldAddDataSourceExpansion(topic: string, taskType: ResearchTaskType, explicitDimensions: string[]) {
+  return taskType === "data-research"
+    || taskType === "sports-analysis"
+    || taskType === "competitive"
+    || explicitDimensions.includes("数据源")
+    || /数据源|dataset|open data|csv|excel|parquet|统计数据|公开数据/i.test(topic);
+}
+
+function shouldAddChinaStatisticsExpansion(topic: string, taskType: ResearchTaskType, explicitDimensions: string[]) {
+  return taskType === "competitive"
+    || taskType === "data-research"
+    || explicitDimensions.some((dimension) => ["出生率", "结婚率", "地区", "消费人群"].includes(dimension))
+    || /出生率|结婚率|生育率|人口|市场|消费|地区|城市|省份/i.test(topic);
 }
 
 function topicKeywordPhrase(topicCore: string) {

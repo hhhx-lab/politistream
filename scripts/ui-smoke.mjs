@@ -262,6 +262,16 @@ async function checkResearchPanelResponsive({ width, height, name }) {
       throw new Error(`research ${name} has horizontal overflow: ${metrics.scrollWidth} > ${metrics.clientWidth}`);
     }
 
+    await page.getByText("Research 到 Data Lab 决策", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("分析适配度", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByRole("button", { name: "完整分析" }).first().click();
+    await page.getByText("Research 分析交接", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("当前分析计划", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("推荐方法", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByText("字段覆盖", { exact: false }).first().waitFor({ timeout: 10000 });
+    await page.getByRole("button", { name: /回到 Research run/ }).first().click();
+    await page.getByText("Run 时间线", { exact: false }).first().waitFor({ timeout: 10000 });
+
     await openResearchTab("诊断");
     for (const text of ["运行监控", "队列健康", "Provider 健康", "research.fetch", "能力验收台", "最近验收证据", "Postgres", "Redis/BullMQ", "搜索 Provider", "数据 Provider", "sports", "能力目标 / Deep", "URL 预算", "Env 配置清单", "BRAVE_API_KEY", "AI_BASE_URL", "AI_API_KEY", "AI_MODEL", "Extractor 逐类型样本", "structured-data", "增强抓取 smoke", "兼容 API 验收", "/api/datasets/:id/validate", "导出产物验收", "pptx", "Agent Console", "自然语言调度", "provider_live_smoke:passed", "data_source_live_smoke:passed"]) {
       await page.getByText(text, { exact: false }).first().waitFor({ timeout: 10000 }).catch(() => {
@@ -340,7 +350,7 @@ async function checkResearchPanelResponsive({ width, height, name }) {
     await page.getByText("已定位 Research 数据源上下文", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByText("Research smoke 数据源资产清单", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.getByText("smoke-run", { exact: false }).first().waitFor({ timeout: 10000 });
-    await page.getByRole("button", { name: /回到 Research run/ }).click();
+    await page.getByRole("button", { name: /回到 Research run/ }).first().click();
     await page.getByText("Run 时间线", { exact: false }).first().waitFor({ timeout: 10000 });
     await page.screenshot({
       path: path.join(outputDir, `research-${name}.png`),
@@ -413,6 +423,74 @@ async function installResearchRouteMocks(page) {
     budget: job.budget,
     stopConditions: ["达到 Standard URL 预算", "主要来源类型均已覆盖"],
     constraints: job.constraints,
+  };
+  const analysisOpportunity = {
+    id: "analysis-opportunity-smoke",
+    topic: job.topic,
+    researchRunId: run.id,
+    researchJobId: job.id,
+    reportId: run.id,
+    taskType: "tool-evaluation",
+    canEnterDataLab: true,
+    recommendedAnalysisMode: "full_analysis",
+    score: 0.88,
+    scoreBreakdown: {
+      structuredFieldDensity: 0.8,
+      dimensionRichness: 0.76,
+      sourceQuality: 0.83,
+      evidenceCoverage: 0.72,
+      analysisValue: 0.74,
+      topicFit: 0.35,
+      weights: {
+        structuredFieldDensity: 0.2,
+        dimensionRichness: 0.18,
+        sourceQuality: 0.2,
+        evidenceCoverage: 0.16,
+        analysisValue: 0.16,
+        topicFit: 0.1,
+      },
+      finalScore: 0.88,
+    },
+    decisionReason: "工具比较任务具备足够字段和来源，可进入完整分析。",
+    candidateFeatures: ["format", "license", "stars", "price", "release_date"],
+    requiredFields: ["product", "price", "license", "feature", "release_date", "stars"],
+    availableFields: ["product", "price", "license", "feature", "release_date", "stars"],
+    missingFields: [],
+    recommendedDataSources: [
+      { kind: "official", title: "Pandoc official docs", reason: "official source", sourceType: "official", qualityScore: 0.94 },
+      { kind: "github", title: "Pandoc GitHub", reason: "repo metadata", sourceType: "github", qualityScore: 0.82 },
+    ],
+    recommendedActions: ["创建或复用数据源清单", "进入完整分析向导"],
+    evidenceSummary: [
+      { claim: "Pandoc supports multiple document formats", support: "official docs", sourceUrl: "https://pandoc.org/" },
+    ],
+    warnings: [],
+    createdDatasetIds: ["smoke-data-source-dataset"],
+    status: "ready",
+  };
+  const analysisHandoff = {
+    id: "analysis-handoff-smoke",
+    opportunityId: analysisOpportunity.id,
+    researchRunId: run.id,
+    researchJobId: job.id,
+    reportId: run.id,
+    decision: "full_analysis",
+    targetPage: "wizard",
+    topicId: `research-topic:${job.id}`,
+    datasetIds: ["smoke-data-source-dataset"],
+    planId: "analysis-plan-smoke",
+    allowedOperations: ["profile", "stats", "chart", "frequency-tables", "crosstab"],
+    nextActions: ["进入 Data Lab 完整分析向导"],
+    warnings: ["full_analysis_requires_field_review"],
+    lineage: {
+      runId: run.id,
+      jobId: job.id,
+      reportId: run.id,
+      sourceDatasetId: "smoke-data-source-dataset",
+      opportunityId: analysisOpportunity.id,
+    },
+    createdAt,
+    updatedAt: createdAt,
   };
   const documents = [
     {
@@ -820,6 +898,18 @@ async function installResearchRouteMocks(page) {
         markdown: "## 研究摘要\nPandoc 官方来源、GitHub 和包管理器信息已纳入证据图。\n证据质量门通过：2/2 个结论已关联证据。\n\n## 关键结论\n- Pandoc 是核心候选工具。",
         generatedAt: "2026-06-08T00:05:00.000Z",
       },
+    }],
+    [`${appUrl}/api/research/runs/smoke-run/analysis-opportunity`, {
+      opportunity: analysisOpportunity,
+    }],
+    [`${appUrl}/api/research/runs/smoke-run/analysis-handoff`, {
+      handoff: analysisHandoff,
+      opportunity: analysisOpportunity,
+      handoff_id: analysisHandoff.id,
+      plan_id: analysisHandoff.planId,
+      targetPage: analysisHandoff.targetPage,
+      dataset_ids: analysisHandoff.datasetIds,
+      plannedQueries: plan.queries,
     }],
     [`${appUrl}/api/research/runs/smoke-run/plan`, { plan, queries: plan.queries }],
     [`${appUrl}/api/research/runs/smoke-run/events`, {
@@ -1730,6 +1820,95 @@ async function installDataLabOperationRouteMocks(page) {
       createdAt,
     },
   ];
+  const handoffContext = {
+    opportunity: {
+      topic: "文档转换工具深度研究 smoke",
+      researchRunId: "smoke-run",
+      researchJobId: "smoke-job",
+      reportId: "smoke-run",
+      recommendedAnalysisMode: "full_analysis",
+      score: 0.88,
+      candidateFeatures: ["format", "license", "stars", "price", "release_date"],
+      requiredFields: ["product", "price", "license", "feature", "release_date", "stars"],
+      availableFields: ["product", "price", "license", "feature", "release_date", "stars"],
+      missingFields: [],
+      recommendedActions: ["创建或复用数据源清单", "进入完整分析向导"],
+      warnings: [],
+    },
+    handoff: {
+      id: "analysis-handoff-smoke",
+      decision: "full_analysis",
+      targetPage: "wizard",
+      allowedOperations: ["profile", "stats", "chart", "frequency-tables", "crosstab"],
+      nextActions: ["进入 Data Lab 完整分析向导"],
+      warnings: [],
+      planId: "analysis-plan-smoke",
+      lineage: {
+        runId: "smoke-run",
+        jobId: "smoke-job",
+        reportId: "smoke-run",
+        sourceDatasetId: "smoke-data-source-dataset",
+        opportunityId: "analysis-opportunity-smoke",
+      },
+    },
+    plan: {
+      id: "analysis-plan-smoke",
+      topic: "文档转换工具深度研究 smoke",
+      mode: "full_analysis",
+      questions: [
+        { id: "profile-data-quality", title: "文档转换工具现有数据质量和字段覆盖如何？", rationale: "先确认字段类型、缺失率、样本量和来源质量。", priority: 96 },
+        { id: "compare-by-dimension", title: "价格与 license 在不同工具下有什么差异？", rationale: "适合市场、工具、版本比较。", priority: 88 },
+      ],
+      candidateVariables: ["product", "price", "license", "feature", "release_date", "stars"],
+      fieldCoverage: {
+        requiredFields: ["product", "price", "license", "feature", "release_date", "stars"],
+        availableFields: ["product", "price", "license", "feature", "release_date", "stars"],
+        missingFields: [],
+        coverageRatio: 1,
+      },
+      recommendedMethods: [
+        { id: "profile", title: "字段画像和质量检查", kind: "profile", allowed: true, reason: "确认字段类型、缺失率、唯一值和样本量。" },
+        { id: "descriptive-statistics", title: "描述统计", kind: "descriptive-statistics", allowed: true, reason: "输出均值、中位数、标准差和相关矩阵。" },
+        { id: "frequency-tables", title: "频数表和构成分析", kind: "frequency-tables", allowed: true, reason: "做工具分布和构成统计。" },
+      ],
+      recommendedCharts: [
+        { id: "bar", title: "条形图", kind: "bar", description: "工具数量对比", allowed: true },
+        { id: "pie", title: "饼图", kind: "pie", description: "构成占比", allowed: true },
+      ],
+      risks: ["full_analysis_requires_field_review"],
+      nextActions: ["创建或复用数据源清单", "物化关键数据源", "生成数据画像", "进入完整分析向导"],
+      restrictions: ["允许操作: profile / stats / chart / frequency-tables / crosstab"],
+    },
+    dataset: dataSourceDataset,
+    profile: {
+      profile: {
+        rowCount: 2,
+        columnCount: 18,
+        qualityScore: 0.94,
+        warnings: [],
+        columns: [
+          { name: "title", inferredType: "string", totalCount: 2, missingCount: 0, uniqueCount: 2 },
+          { name: "url", inferredType: "string", totalCount: 2, missingCount: 0, uniqueCount: 2 },
+          { name: "provider_type", inferredType: "string", totalCount: 2, missingCount: 0, uniqueCount: 2 },
+          { name: "source_type", inferredType: "string", totalCount: 2, missingCount: 0, uniqueCount: 2 },
+          { name: "priority_score", inferredType: "number", totalCount: 2, missingCount: 0, uniqueCount: 2, min: 0.87, max: 0.91, mean: 0.89 },
+          { name: "source_quality_score", inferredType: "number", totalCount: 2, missingCount: 0, uniqueCount: 2, min: 0.86, max: 0.92, mean: 0.89 },
+        ],
+      },
+      suggestions: [
+        {
+          id: "smoke-bar",
+          kind: "bar",
+          title: "source type count",
+          description: "Smoke source type chart",
+          x: "source_type",
+          y: "priority_score",
+          engine: "echarts",
+          exportFormats: ["json", "png", "svg"],
+        },
+      ],
+    },
+  };
   let datasets = [dataSourceDataset];
 
   await page.route(`${appUrl}/api/analytics/jobs`, async (route) => {
@@ -1737,6 +1916,13 @@ async function installDataLabOperationRouteMocks(page) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ jobs: [smokeJob] }),
+    });
+  });
+  await page.route(`${appUrl}/api/analytics/handoffs/research-run/smoke-run`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(handoffContext),
     });
   });
   await page.route(`${appUrl}/api/analytics/artifacts`, async (route) => {

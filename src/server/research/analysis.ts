@@ -73,7 +73,17 @@ ${content}
     return fallbackResearchAnalysis(topic, document);
   }
 
-  return normalizeResearchAnalysis(result.data);
+  const normalized = normalizeResearchAnalysis(result.data);
+  const fallback = fallbackResearchAnalysis(topic, document);
+  if ((!normalized.relevant || normalized.evidence.length === 0) && fallback.relevant && fallback.evidence.length > 0) {
+    return {
+      ...fallback,
+      summary: normalized.summary || fallback.summary,
+      relevanceScore: Math.max(normalized.relevanceScore, fallback.relevanceScore),
+    };
+  }
+
+  return normalized;
 }
 
 export function evidenceFromAnalysis(

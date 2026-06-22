@@ -47,6 +47,59 @@ interface DataLabProps {
   onOpenResearchRun?: (runId: string) => void;
 }
 
+interface DataLabHandoffContext {
+  opportunity?: {
+    topic?: string;
+    researchRunId?: string;
+    researchJobId?: string;
+    reportId?: string;
+    recommendedAnalysisMode?: string;
+    score?: number;
+    candidateFeatures?: string[];
+    requiredFields?: string[];
+    availableFields?: string[];
+    missingFields?: string[];
+    recommendedActions?: string[];
+    warnings?: string[];
+  };
+  handoff?: {
+    id?: string;
+    decision?: string;
+    targetPage?: string;
+    allowedOperations?: string[];
+    nextActions?: string[];
+    warnings?: string[];
+    planId?: string;
+    lineage?: {
+      runId?: string;
+      jobId?: string;
+      reportId?: string;
+      sourceDatasetId?: string;
+      opportunityId?: string;
+    };
+  };
+  plan?: {
+    id?: string;
+    topic?: string;
+    mode?: string;
+    questions?: Array<{ id?: string; title?: string; rationale?: string; priority?: number }>;
+    candidateVariables?: string[];
+    fieldCoverage?: {
+      requiredFields?: string[];
+      availableFields?: string[];
+      missingFields?: string[];
+      coverageRatio?: number;
+    };
+    recommendedMethods?: Array<{ id?: string; title?: string; kind?: string; allowed?: boolean; reason?: string; disabledReason?: string }>;
+    recommendedCharts?: Array<{ id?: string; title?: string; kind?: string; description?: string; allowed?: boolean }>;
+    risks?: string[];
+    nextActions?: string[];
+    restrictions?: string[];
+  };
+  dataset?: AnalyticsDatasetSummary | null;
+  profile?: DatasetProfileSummary | null;
+}
+
 const text = {
   zh: {
     title: 'Data Lab',
@@ -105,6 +158,29 @@ const text = {
     versionHistory: '版本历史',
     noVersionHistory: '暂无其它快照版本。',
     researchContextLinked: '已定位 Research 数据源上下文',
+    handoffContext: 'Research 分析交接',
+    handoffContextHint: '这块说明当前研究为什么进入 Data Lab、已经有哪些字段/数据源、缺什么，以及下一步适合做轻量分析、完整分析还是继续补抓。',
+    handoffLoading: '正在读取 Research 交接上下文...',
+    handoffDecision: '用户决策',
+    handoffMode: '分析模式',
+    handoffScore: '适配度',
+    handoffTopic: '研究课题',
+    handoffReport: '报告',
+    handoffCandidateFeatures: '候选特征',
+    handoffRequiredFields: '必需字段',
+    handoffAvailableFields: '已有字段',
+    handoffMissingFields: '缺失字段',
+    handoffAllowedOperations: '允许操作',
+    handoffNextActions: '下一步',
+    handoffRestrictions: '限制',
+    handoffRisks: '风险',
+    handoffSourceDataset: '数据源清单',
+    handoffQuestions: '分析问题',
+    handoffMethods: '推荐方法',
+    handoffCharts: '推荐图表',
+    handoffCoverage: '字段覆盖',
+    handoffAllowed: '可运行',
+    handoffDisabled: '暂不运行',
     openResearchRun: '回到 Research run',
     linkedRun: '关联 run',
     providerType: 'Provider 类型',
@@ -259,6 +335,29 @@ const text = {
     versionHistory: 'Version history',
     noVersionHistory: 'No other snapshot versions yet.',
     researchContextLinked: 'Research data-source context focused',
+    handoffContext: 'Research analysis handoff',
+    handoffContextHint: 'This explains why the research run entered Data Lab, what fields and sources are available, what is missing, and whether light analysis, full analysis, or continued crawling is appropriate.',
+    handoffLoading: 'Loading Research handoff context...',
+    handoffDecision: 'Decision',
+    handoffMode: 'Mode',
+    handoffScore: 'Fit score',
+    handoffTopic: 'Topic',
+    handoffReport: 'Report',
+    handoffCandidateFeatures: 'Candidate features',
+    handoffRequiredFields: 'Required fields',
+    handoffAvailableFields: 'Available fields',
+    handoffMissingFields: 'Missing fields',
+    handoffAllowedOperations: 'Allowed operations',
+    handoffNextActions: 'Next actions',
+    handoffRestrictions: 'Restrictions',
+    handoffRisks: 'Risks',
+    handoffSourceDataset: 'Source registry',
+    handoffQuestions: 'Analysis questions',
+    handoffMethods: 'Recommended methods',
+    handoffCharts: 'Recommended charts',
+    handoffCoverage: 'Field coverage',
+    handoffAllowed: 'Allowed',
+    handoffDisabled: 'Disabled',
     openResearchRun: 'Back to Research run',
     linkedRun: 'Linked run',
     providerType: 'Provider type',
@@ -422,6 +521,8 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
   const [datasetQueryLimit, setDatasetQueryLimit] = useState('25');
   const [materializingSourceKey, setMaterializingSourceKey] = useState('');
   const [materializeResults, setMaterializeResults] = useState<MaterializeResultState[]>([]);
+  const [handoffContext, setHandoffContext] = useState<DataLabHandoffContext | null>(null);
+  const [handoffContextBusy, setHandoffContextBusy] = useState(false);
   const [appliedFocusKey, setAppliedFocusKey] = useState('');
   const [busyKind, setBusyKind] = useState<string>('');
   const [error, setError] = useState('');
@@ -523,26 +624,79 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
     }
   };
 
+  const loadHandoffContext = async (runId: string) => {
+    setHandoffContextBusy(true);
+    try {
+      const res = await fetch(`/api/analytics/handoffs/research-run/${runId}`);
+      const data = await res.json() as DataLabHandoffContext & { error?: string; profile?: { profile?: DatasetProfileSummary; suggestions?: VisualizationSuggestionSummary[] } | null };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const profilePayload = isRecord(data.profile) ? data.profile : null;
+      const normalizedContext: DataLabHandoffContext = {
+        opportunity: data.opportunity,
+        handoff: data.handoff,
+        plan: data.plan,
+        dataset: data.dataset ?? null,
+        profile: isRecord(profilePayload?.profile) ? profilePayload.profile as DatasetProfileSummary : null,
+      };
+      setHandoffContext(normalizedContext);
+      if (normalizedContext.dataset) {
+        setDatasets((current) => current.some((item) => item.id === normalizedContext.dataset?.id)
+          ? current
+          : [normalizedContext.dataset!, ...current]);
+        selectDatasetSummary(normalizedContext.dataset, { clearOperation: false });
+      }
+      if (normalizedContext.profile) setProfile(normalizedContext.profile);
+      if (Array.isArray(profilePayload?.suggestions)) setSuggestions(profilePayload.suggestions);
+      return normalizedContext;
+    } catch (contextError) {
+      setError(contextError instanceof Error ? contextError.message : String(contextError));
+      return null;
+    } finally {
+      setHandoffContextBusy(false);
+    }
+  };
+
   useEffect(() => {
-    const focusKey = `${focus?.datasetId ?? ''}:${focus?.runId ?? ''}`;
-    if (!focusKey || focusKey === ':' || appliedFocusKey === focusKey || datasets.length === 0) return;
-    const datasetMatch = focus?.datasetId ? datasets.find((dataset) => dataset.id === focus.datasetId) : undefined;
-    const runMatch = focus?.runId
-      ? datasets.find((dataset) => dataset.sourceKind === 'research-data-source' && dataset.sourceRef === focus.runId)
-        ?? datasets.find((dataset) => runIdFromDataset(dataset) === focus.runId)
-      : undefined;
-    const match = datasetMatch ?? runMatch;
-    if (!match) return;
-    selectDatasetSummary(match, { clearOperation: false });
-    setActivePage(match.sourceKind === 'research-data-source' ? 'sources' : 'dataset');
-    recordDatasetOperationPayload({
-      operation: copy.researchContextLinked,
-      runId: focus?.runId,
-      datasetId: match.id,
-      sourceKind: match.sourceKind,
-    });
-    setAppliedFocusKey(focusKey);
-  }, [focus?.datasetId, focus?.runId, datasets, appliedFocusKey]);
+    const focusKey = `${focus?.datasetId ?? ''}:${focus?.runId ?? ''}:${focus?.handoffId ?? ''}:${focus?.planId ?? ''}:${focus?.mode ?? ''}:${focus?.page ?? ''}`;
+    const hasFocus = Boolean(focus?.datasetId || focus?.runId || focus?.handoffId || focus?.planId || focus?.mode || focus?.page);
+    if (!hasFocus || appliedFocusKey === focusKey) return;
+    let cancelled = false;
+    const applyFocus = async () => {
+      const handoff = focus?.runId ? await loadHandoffContext(focus.runId) : null;
+      if (cancelled) return;
+      const datasetMatch = focus?.datasetId ? datasets.find((dataset) => dataset.id === focus.datasetId) : undefined;
+      const runMatch = focus?.runId
+        ? datasets.find((dataset) => dataset.sourceKind === 'research-data-source' && dataset.sourceRef === focus.runId)
+          ?? datasets.find((dataset) => runIdFromDataset(dataset) === focus.runId)
+        : undefined;
+      const match = handoff?.dataset ?? datasetMatch ?? runMatch;
+      if (match) {
+        selectDatasetSummary(match, { clearOperation: false });
+      }
+      const datasetFocusedPage = focus?.datasetId && match
+        ? (match.sourceKind === 'research-data-source' ? 'sources' : 'dataset')
+        : undefined;
+      const targetPage = focus?.page
+        ?? datasetFocusedPage
+        ?? (handoff?.handoff?.targetPage === 'wizard' ? 'wizard' : handoff?.handoff?.targetPage === 'sources' ? 'sources' : undefined)
+        ?? (match?.sourceKind === 'research-data-source' ? 'sources' : match ? 'dataset' : 'home');
+      setActivePage(targetPage);
+      recordDatasetOperationPayload({
+        operation: copy.researchContextLinked,
+        runId: focus?.runId,
+        datasetId: match?.id,
+        sourceKind: match?.sourceKind,
+        mode: focus?.mode ?? handoff?.handoff?.decision ?? handoff?.opportunity?.recommendedAnalysisMode,
+        handoffId: focus?.handoffId ?? handoff?.handoff?.id,
+        planId: focus?.planId ?? handoff?.handoff?.planId ?? handoff?.plan?.id,
+      });
+      setAppliedFocusKey(focusKey);
+    };
+    applyFocus();
+    return () => {
+      cancelled = true;
+    };
+  }, [focus?.datasetId, focus?.runId, focus?.handoffId, focus?.planId, focus?.mode, focus?.page, datasets, appliedFocusKey]);
 
   const runProfile = async () => {
     setBusyKind('profile');
@@ -1048,6 +1202,16 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
         )}
 
         <main className="mt-5 space-y-5">
+          {(handoffContextBusy || handoffContext) && (
+            <HandoffContextPanel
+              context={handoffContext}
+              busy={handoffContextBusy}
+              copy={copy}
+              language={language}
+              onOpenResearchRun={onOpenResearchRun}
+            />
+          )}
+
           {activePage === 'home' && (
             <section className="space-y-5">
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1207,7 +1371,7 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
           )}
 
           {activePage === 'wizard' && (
-            <DataLabAnalysisWizard language={language} copy={copy} dataset={selectedDataset} profile={profile} suggestions={suggestions} busyKind={busyKind} onRunAnalysis={runWorkerAnalysis} onRenderVisualization={renderVisualization} />
+            <DataLabAnalysisWizard language={language} copy={copy} dataset={selectedDataset} profile={profile} suggestions={suggestions} handoffContext={handoffContext} busyKind={busyKind} onRunAnalysis={runWorkerAnalysis} onRenderVisualization={renderVisualization} />
           )}
 
           {activePage === 'analysis' && (
@@ -1705,6 +1869,136 @@ const DataSourceRegistryPanel: React.FC<{
   );
 };
 
+const HandoffContextPanel: React.FC<{
+  context: DataLabHandoffContext | null;
+  busy: boolean;
+  copy: typeof text.zh | typeof text.en;
+  language: Language;
+  onOpenResearchRun?: (runId: string) => void;
+}> = ({ context, busy, copy, language, onOpenResearchRun }) => {
+  if (busy && !context) {
+    return (
+      <Panel title={copy.handoffContext} icon={<Sparkles size={18} />} accent="#6C4AB6">
+        <div className="flex items-center gap-2 text-sm text-stone-600">
+          <Activity size={14} className="animate-spin" />
+          {copy.handoffLoading}
+        </div>
+      </Panel>
+    );
+  }
+
+  const opportunity = context?.opportunity;
+  const handoff = context?.handoff;
+  const plan = context?.plan;
+  const score = opportunity?.score ?? 0;
+  const coverageRatio = plan?.fieldCoverage?.coverageRatio ?? (opportunity?.requiredFields.length
+    ? (opportunity.availableFields.length - opportunity.missingFields.length) / Math.max(1, opportunity.requiredFields.length)
+    : 0);
+  const mode = plan?.mode ?? handoff?.decision ?? opportunity?.recommendedAnalysisMode ?? 'light_analysis';
+  const reportId = opportunity?.reportId ?? handoff?.lineage?.reportId;
+  const sourceDataset = context?.dataset ?? null;
+  const featureChips = uniqueStrings([
+    ...(opportunity?.candidateFeatures ?? []),
+    ...(plan?.candidateVariables ?? []),
+  ]);
+  const requiredFields = uniqueStrings(plan?.fieldCoverage?.requiredFields ?? opportunity?.requiredFields ?? []);
+  const availableFields = uniqueStrings(plan?.fieldCoverage?.availableFields ?? opportunity?.availableFields ?? []);
+  const missingFields = uniqueStrings(plan?.fieldCoverage?.missingFields ?? opportunity?.missingFields ?? []);
+  const nextActions = uniqueStrings([
+    ...(opportunity?.recommendedActions ?? []),
+    ...(handoff?.nextActions ?? []),
+    ...(plan?.nextActions ?? []),
+  ]);
+  const restrictions = uniqueStrings([
+    ...(handoff?.allowedOperations ? [`${copy.handoffAllowedOperations}: ${handoff.allowedOperations.join(' / ')}`] : []),
+    ...(plan?.restrictions ?? []),
+  ]);
+  const risks = uniqueStrings([
+    ...(opportunity?.warnings ?? []),
+    ...(handoff?.warnings ?? []),
+    ...(plan?.risks ?? []),
+  ]);
+  const methods = plan?.recommendedMethods ?? [];
+  const charts = plan?.recommendedCharts ?? [];
+  const questions = plan?.questions ?? [];
+
+  return (
+    <Panel title={copy.handoffContext} icon={<Sparkles size={18} />} accent="#6C4AB6">
+      <div className="space-y-4">
+        <p className="text-sm leading-6 text-stone-700">{copy.handoffContextHint}</p>
+
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <MiniMetric label={copy.handoffTopic} value={opportunity?.topic ?? plan?.topic ?? '-'} />
+          <MiniMetric label={copy.handoffMode} value={modeLabel(mode, language)} />
+          <MiniMetric label={copy.handoffScore} value={`${Math.round(score * 100)}%`} />
+          <MiniMetric label={copy.handoffCoverage} value={`${Math.round(Math.max(0, Math.min(1, coverageRatio)) * 100)}%`} />
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+          <div className="space-y-3">
+            {onOpenResearchRun && (opportunity?.researchRunId ?? handoff?.lineage?.runId) && (
+              <button
+                onClick={() => onOpenResearchRun(opportunity?.researchRunId ?? handoff?.lineage?.runId ?? '')}
+                className="inline-flex min-h-9 items-center gap-2 border border-[#151515] bg-white px-3 py-2 font-mono text-[10px] uppercase hover:bg-[#151515] hover:text-white"
+              >
+                <ExternalLink size={13} />
+                {copy.openResearchRun}
+              </button>
+            )}
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <MiniMetric label={copy.handoffDecision} value={handoff?.decision ?? opportunity?.userDecision ?? '-'} />
+              <MiniMetric label={copy.handoffReport} value={reportId ?? '-'} />
+            </div>
+
+            {sourceDataset && (
+              <div className="border border-stone-300 bg-white p-3">
+                <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.handoffSourceDataset}</div>
+                <div className="mt-1 font-serif text-xl">{sourceDataset.name}</div>
+                <div className="mt-2 break-all font-mono text-[10px] text-stone-500">{sourceDataset.id}</div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <MiniMetric label={copy.rows} value={sourceDataset.rowCount} />
+                  <MiniMetric label={copy.cols} value={sourceDataset.columnCount} />
+                  <MiniMetric label={copy.preview} value={sourceDataset.sampleRows?.length ?? 0} />
+                </div>
+              </div>
+            )}
+
+            {plan?.fieldCoverage && (
+              <div className="grid gap-3 lg:grid-cols-3">
+                <DetailList title={copy.handoffRequiredFields} items={requiredFields} />
+                <DetailList title={copy.handoffAvailableFields} items={availableFields} />
+                <DetailList title={copy.handoffMissingFields} items={missingFields} emptyLabel={copy.empty} />
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <DetailList title={copy.handoffCandidateFeatures} items={featureChips} />
+            <DetailList title={copy.handoffAllowedOperations} items={handoff?.allowedOperations ?? []} />
+            <DetailList title={copy.handoffNextActions} items={nextActions} />
+            {restrictions.length > 0 && <DetailList title={copy.handoffRestrictions} items={restrictions} />}
+            {risks.length > 0 && <DetailList title={copy.handoffRisks} items={risks} />}
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <DetailList title={copy.handoffQuestions} items={questions.map((question) => `${question.title}${question.rationale ? ` · ${question.rationale}` : ''}`)} />
+          <DetailList
+            title={copy.handoffMethods}
+            items={methods.map((method) => `${method.title} · ${method.kind}${method.allowed ? '' : ` · ${copy.handoffDisabled}${method.disabledReason ? `: ${method.disabledReason}` : ''}`}`)}
+          />
+        </div>
+
+        <DetailList
+          title={copy.handoffCharts}
+          items={charts.map((chart) => `${chart.title} · ${chart.kind}${chart.allowed ? '' : ` · ${copy.handoffDisabled}`}`)}
+        />
+      </div>
+    </Panel>
+  );
+};
+
 const MaterializeStatusBadge: React.FC<{ status?: MaterializeResultState; copy: typeof text.zh | typeof text.en }> = ({ status, copy }) => {
   if (!status) {
     return <span className="font-mono text-[10px] uppercase text-stone-400">{copy.materializePending}</span>;
@@ -1742,6 +2036,34 @@ const MiniMetric: React.FC<{ label: string; value: string | number }> = ({ label
     <div className="mt-1 truncate font-serif text-xl">{value}</div>
   </div>
 );
+
+const DetailList: React.FC<{ title: string; items: string[]; emptyLabel?: string }> = ({ title, items, emptyLabel = '-' }) => (
+  <div className="border border-stone-300 bg-white p-3">
+    <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-stone-500">{title}</div>
+    {items.length > 0 ? (
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <span key={item} className="max-w-full border border-stone-300 bg-stone-50 px-2 py-1 text-[11px] leading-5 text-stone-700">
+            {item}
+          </span>
+        ))}
+      </div>
+    ) : (
+      <div className="text-xs text-stone-500">{emptyLabel}</div>
+    )}
+  </div>
+);
+
+function modeLabel(mode: string, language: Language) {
+  const zh = language === 'zh';
+  const labels: Record<string, string> = {
+    report_only: zh ? '只保留报告' : 'Report only',
+    light_analysis: zh ? '轻量分析' : 'Light analysis',
+    full_analysis: zh ? '完整分析' : 'Full analysis',
+    continue_crawl: zh ? '继续抓取' : 'Continue crawl',
+  };
+  return labels[mode] ?? mode;
+}
 
 const EmptyBlock: React.FC<{ text: string }> = ({ text }) => (
   <div className="flex min-h-52 items-center justify-center border border-dashed border-stone-300 bg-white/60 p-6 text-center text-sm text-stone-500">

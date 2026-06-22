@@ -110,6 +110,28 @@ export function suggestVisualizations(profile: DatasetProfile): VisualizationSug
       engine: "echarts",
       exportFormats: ["png", "svg", "html"],
     });
+
+    suggestions.push({
+      id: "category-pie",
+      kind: "pie",
+      title: `${categorical[0].name} 构成`,
+      description: "按分类字段统计占比，适合来源构成、地区份额、渠道结构和人群分布。",
+      x: categorical[0].name,
+      y: numeric[0].name,
+      engine: "echarts",
+      exportFormats: ["png", "svg", "html"],
+    });
+
+    suggestions.push({
+      id: "category-box",
+      kind: "box",
+      title: `${numeric[0].name} 按 ${categorical[0].name} 的分布`,
+      description: "按分组比较数值分布、中位数、四分位和离群点，适合 SPSS 式组间探索。",
+      x: categorical[0].name,
+      y: numeric[0].name,
+      engine: "plotly",
+      exportFormats: ["png", "svg", "html"],
+    });
   }
 
   if (dates[0] && numeric[0]) {

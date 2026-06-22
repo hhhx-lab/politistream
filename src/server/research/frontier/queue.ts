@@ -9,9 +9,13 @@ export function candidateToFrontierItem(
 ): FrontierItem {
   const scoreBreakdown = scoreFrontierItemBreakdown({
     url: candidate.url,
+    provider: candidate.provider,
+    providerType: candidate.providerType,
     sourceType: candidate.sourceType,
     title: candidate.title,
     snippet: candidate.snippet,
+    query: candidate.query,
+    rank: candidate.rank,
     topic,
     depth: candidate.depth,
     discoveredDomainCount,

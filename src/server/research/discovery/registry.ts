@@ -173,6 +173,7 @@ export function createRSSDiscoveryProvider(): DiscoveryProvider {
     type: "rss",
     enabled: () => true,
     async discover(input) {
+      if (!wantsNews(input.query.sourceTypes, input.query.text, input.query.purpose)) return [];
       const { getRSSSources } = await import("../../services/rss");
       const sources = getRSSSources();
       return sources
@@ -366,7 +367,7 @@ export function createGdeltDiscoveryProvider(): DiscoveryProvider {
     type: "news-api",
     enabled: () => true,
     async discover(input) {
-      if (!input.query.sourceTypes.some((type) => ["mainstream-news", "official", "unknown"].includes(type))) {
+      if (!wantsNews(input.query.sourceTypes, input.query.text, input.query.purpose)) {
         return [];
       }
 
@@ -406,6 +407,7 @@ export function createWaybackDiscoveryProvider(): DiscoveryProvider {
     type: "archive",
     enabled: () => true,
     async discover(input) {
+      if (!wantsArchive(input.query.text, input.query.purpose)) return [];
       const urls = input.seedUrls.length > 0
         ? input.seedUrls
         : inferLikelyDomains(input.topic).size > 0
@@ -437,7 +439,7 @@ export function createCommonCrawlDiscoveryProvider(): DiscoveryProvider {
     urlFor: (query) => `https://index.commoncrawl.org/?url=${encodeURIComponent(query.text)}&output=json`,
     titleFor: (query) => `Common Crawl index: ${query.text}`,
     snippet: "Common Crawl 公开网页索引入口，适合历史公开网页和大规模语料检索。",
-    onlyWhen: (input) => input.seedUrls.length > 0 || input.query.purpose === "dataset-discovery" || input.query.purpose === "timeline",
+    onlyWhen: (input) => input.query.purpose === "dataset-discovery" || wantsArchive(input.query.text, input.query.purpose),
   });
 }
 
@@ -778,6 +780,18 @@ function createStaticDiscoveryProvider(input: {
 function wantsData(sourceTypes: SourceType[], text: string) {
   return sourceTypes.some((type) => ["dataset", "data-catalog", "structured-api", "benchmark", "financial-data", "geospatial"].includes(type))
     || /数据|dataset|data source|csv|excel|parquet|统计|指标|可视化|chart|spss|kaggle|open data/i.test(text);
+}
+
+function wantsNews(sourceTypes: SourceType[], text: string, purpose?: PlannedQuery["purpose"]) {
+  return purpose === "news-coverage"
+    || sourceTypes.some((type) => ["mainstream-news", "rss"].includes(type))
+    || /新闻|报道|媒体|latest|recent|today|reuters|ap|bbc|news|press release|监控|rss|溯源|查证/i.test(text);
+}
+
+function wantsArchive(text: string, purpose?: PlannedQuery["purpose"]) {
+  return purpose === "timeline"
+    || purpose === "primary-source"
+    || /溯源|查证|原始出处|历史|timeline|first reported|wayback|archive|common crawl|网页快照/i.test(text);
 }
 
 function sportsSearchUrl(text: string) {

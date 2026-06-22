@@ -8,12 +8,28 @@ export const DEFAULT_RESEARCH_BUDGET: ResearchBudget = {
   runIntervalMinutes: 60,
 };
 
-export function normalizeResearchBudget(input: Partial<ResearchBudget> = {}): ResearchBudget {
+export const RESEARCH_BUDGET_PRESETS = {
+  quick: { maxDepth: 1, maxUrlsPerRun: 30, maxDomainsPerRun: 10, runIntervalMinutes: 60 },
+  standard: { maxDepth: 2, maxUrlsPerRun: 150, maxDomainsPerRun: 40, runIntervalMinutes: 60 },
+  deep: { maxDepth: 3, maxUrlsPerRun: 500, maxDomainsPerRun: 100, runIntervalMinutes: 60 },
+} satisfies Record<string, ResearchBudget>;
+
+export interface ResearchBudgetInput extends Partial<ResearchBudget> {
+  mode?: string;
+  maxUrls?: unknown;
+  maxDomains?: unknown;
+  depth?: unknown;
+}
+
+export function normalizeResearchBudget(input: ResearchBudgetInput = {}): ResearchBudget {
+  const raw = input;
+  const preset = budgetPreset(raw.mode) ?? DEFAULT_RESEARCH_BUDGET;
+
   return {
-    maxDepth: positiveInt(input.maxDepth, DEFAULT_RESEARCH_BUDGET.maxDepth),
-    maxUrlsPerRun: positiveInt(input.maxUrlsPerRun, DEFAULT_RESEARCH_BUDGET.maxUrlsPerRun),
-    maxDomainsPerRun: positiveInt(input.maxDomainsPerRun, DEFAULT_RESEARCH_BUDGET.maxDomainsPerRun),
-    runIntervalMinutes: positiveInt(input.runIntervalMinutes, DEFAULT_RESEARCH_BUDGET.runIntervalMinutes),
+    maxDepth: positiveInt(raw.maxDepth ?? raw.depth, preset.maxDepth),
+    maxUrlsPerRun: positiveInt(raw.maxUrlsPerRun ?? raw.maxUrls, preset.maxUrlsPerRun),
+    maxDomainsPerRun: positiveInt(raw.maxDomainsPerRun ?? raw.maxDomains, preset.maxDomainsPerRun),
+    runIntervalMinutes: positiveInt(raw.runIntervalMinutes, preset.runIntervalMinutes),
   };
 }
 
@@ -50,4 +66,10 @@ function positiveInt(value: unknown, fallback: number): number {
     return fallback;
   }
   return parsed;
+}
+
+function budgetPreset(mode: unknown): ResearchBudget | null {
+  if (typeof mode !== "string") return null;
+  const normalized = mode.trim().toLowerCase();
+  return RESEARCH_BUDGET_PRESETS[normalized as keyof typeof RESEARCH_BUDGET_PRESETS] ?? null;
 }
