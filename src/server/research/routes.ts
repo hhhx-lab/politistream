@@ -49,6 +49,8 @@ import { createQueuedResearchRun } from "./run";
 import { enqueueResearchStage, getQueueStatus } from "./workers/queues";
 import { resumeStageForRunStatus } from "./workers/stageTypes";
 import type { AnalysisHandoff, AnalysisHandoffDecision, AnalysisOpportunity, PlannedQuery, QueryPurpose, ResearchJob, ResearchRun, SourceType } from "./types";
+import { createAnalyticsDataset, listAnalyticsDatasets } from "../analytics/store";
+import { buildResearchDataSourceRows, type ResearchDataSourceDatasetSummary } from "../analytics/researchDataSources";
 
 export function createResearchRouter() {
   const router = Router();
@@ -323,12 +325,22 @@ export function createResearchRouter() {
         return res.status(500).json({ error: "analysis_opportunity_id_missing" });
       }
 
-      const handoffDraft = buildAnalysisHandoffDraft({ opportunity, job, run, decision });
+      const sideEffects = await prepareAnalysisHandoffSideEffects({ decision, opportunity, job, run });
+      const handoffDraft = buildAnalysisHandoffDraft({
+        opportunity,
+        job,
+        run,
+        decision,
+        datasetIds: sideEffects.datasetIds,
+        sourceDatasetId: sideEffects.sourceDatasetId,
+        extraWarnings: sideEffects.warnings,
+        nextActions: sideEffects.nextActions,
+      });
       const handoff = await upsertAnalysisHandoff(handoffDraft);
       await addRunEvent({
         jobId: job.id,
         runId: run.id,
-        stage: run.stage,
+        stage: decision === "continue_crawl" ? "discovery" : run.stage,
         level: "info",
         message: "已记录 Research 到 Data Lab 的分析交接决策。",
         data: {
@@ -336,14 +348,16 @@ export function createResearchRouter() {
           opportunityId: opportunity.id,
           decision: handoff.decision,
           targetPage: handoff.targetPage,
+          datasetIds: handoff.datasetIds,
+          plannedQueryCount: sideEffects.plannedQueries.length,
         },
       });
 
       res.status(201).json(formatAnalysisHandoffResponse({
         handoff,
         opportunity,
-        datasets: [],
-        plannedQueries: [],
+        datasets: sideEffects.datasets,
+        plannedQueries: sideEffects.plannedQueries,
       }));
     } catch (error) {
       sendResearchError(res, error);
@@ -676,10 +690,15 @@ function buildAnalysisHandoffDraft(input: {
   job: ResearchJob;
   run: ResearchRun;
   decision: AnalysisHandoffDecision;
+  datasetIds: string[];
+  sourceDatasetId?: string;
+  extraWarnings?: string[];
+  nextActions?: string[];
 }): AnalysisHandoff {
   const warnings = [
     ...input.opportunity.warnings,
     ...handoffWarningsForDecision(input.decision, input.opportunity),
+    ...(input.extraWarnings ?? []),
   ];
   return {
     opportunityId: input.opportunity.id ?? "",
@@ -689,18 +708,257 @@ function buildAnalysisHandoffDraft(input: {
     decision: input.decision,
     targetPage: targetPageForHandoffDecision(input.decision),
     topicId: topicIdForHandoffDecision(input.decision, input.job.id),
-    datasetIds: [],
+    datasetIds: input.datasetIds,
     planId: planIdForHandoffDecision(input.decision, input.opportunity.id),
     allowedOperations: allowedOperationsForHandoffDecision(input.decision),
-    nextActions: nextActionsForHandoffDecision(input.decision, input.opportunity),
+    nextActions: input.nextActions ?? nextActionsForHandoffDecision(input.decision, input.opportunity),
     warnings,
     lineage: {
       runId: input.run.id,
       jobId: input.job.id,
       reportId: input.opportunity.reportId,
+      sourceDatasetId: input.sourceDatasetId,
       opportunityId: input.opportunity.id ?? "",
     },
   };
+}
+
+async function prepareAnalysisHandoffSideEffects(input: {
+  decision: AnalysisHandoffDecision;
+  opportunity: AnalysisOpportunity;
+  job: ResearchJob;
+  run: ResearchRun;
+}): Promise<{
+  datasetIds: string[];
+  datasets: Array<Record<string, unknown>>;
+  plannedQueries: PlannedQuery[];
+  sourceDatasetId?: string;
+  nextActions?: string[];
+  warnings: string[];
+}> {
+  if (input.decision === "report_only") {
+    return {
+      datasetIds: [],
+      datasets: [],
+      plannedQueries: [],
+      warnings: [],
+      nextActions: nextActionsForHandoffDecision(input.decision, input.opportunity),
+    };
+  }
+
+  if (input.decision === "continue_crawl") {
+    const plannedQueries = await appendContinueCrawlQueries({
+      job: input.job,
+      run: input.run,
+      opportunity: input.opportunity,
+    });
+    if (plannedQueries.length > 0) {
+      const queries = await listPlannedQueriesForRun(input.run.id);
+      await updateResearchJobQueryPlan(input.job.id, queries.map((query) => query.text));
+      await updateResearchRunStatus(input.run.id, "queued", "discovery");
+      await updateResearchJobStatus(input.job.id, "running");
+      await enqueueResearchStage({ runId: input.run.id, jobId: input.job.id, stage: "discovery", attemptReason: "manual" });
+    }
+    return {
+      datasetIds: [],
+      datasets: [],
+      plannedQueries,
+      warnings: plannedQueries.length > 0 ? [] : ["未能生成额外的继续抓取查询。"],
+      nextActions: nextActionsForHandoffDecision(input.decision, input.opportunity),
+    };
+  }
+
+  const registry = await ensureResearchDataSourceRegistryDataset(input);
+  return {
+    datasetIds: [registry.dataset.id],
+    datasets: [formatHandoffDataset(registry)],
+    plannedQueries: [],
+    sourceDatasetId: registry.dataset.id,
+    warnings: registry.warnings,
+    nextActions: input.decision === "light_analysis"
+      ? ["进入 Data Lab 来源页", "检查并物化可用数据源", "运行画像、描述统计和基础图表"]
+      : nextActionsForHandoffDecision(input.decision, input.opportunity),
+  };
+}
+
+async function ensureResearchDataSourceRegistryDataset(input: {
+  opportunity: AnalysisOpportunity;
+  job: ResearchJob;
+  run: ResearchRun;
+}): Promise<{
+  dataset: Awaited<ReturnType<typeof createAnalyticsDataset>>["dataset"];
+  summary: ResearchDataSourceDatasetSummary;
+  reused: boolean;
+  warnings: string[];
+}> {
+  const existing = await findResearchDataSourceRegistryDataset(input.run.id);
+  if (existing) {
+    return {
+      dataset: existing.dataset,
+      summary: existing.summary,
+      reused: true,
+      warnings: existing.dataset.rowCount > 0 ? [] : ["已复用但当前 source registry 仍为空。"],
+    };
+  }
+
+  const [candidates, frontier, providers] = await Promise.all([
+    listSearchCandidatesForRun(input.run.id),
+    listFrontierItemsForRun(input.run.id),
+    listDiscoveryResultsForRun(input.run.id),
+  ]);
+  const { rows, summary } = buildResearchDataSourceRows({
+    runId: input.run.id,
+    candidates,
+    frontier,
+    providers,
+  });
+  const result = await createAnalyticsDataset({
+    name: `${input.job.topic} / Research data sources`,
+    sourceKind: "research-data-source",
+    sourceRef: input.run.id,
+    rows,
+    metadata: {
+      runId: input.run.id,
+      jobId: input.job.id,
+      topic: input.job.topic,
+      analysisOpportunityId: input.opportunity.id,
+      recommendedAnalysisMode: input.opportunity.recommendedAnalysisMode,
+      sourceDatasetType: "research-data-source-candidates",
+      summary,
+      lineage: {
+        candidates: candidates.length,
+        frontier: frontier.length,
+        providers: providers.length,
+        generatedFrom: [
+          "search_candidates",
+          "frontier_items",
+          "discovery_results",
+        ],
+      },
+    },
+  });
+  return {
+    dataset: result.dataset,
+    summary,
+    reused: false,
+    warnings: rows.length > 0 ? [] : ["当前 Research run 尚未整理出可复用的数据源，source registry 为空。"],
+  };
+}
+
+async function findResearchDataSourceRegistryDataset(runId: string) {
+  const datasets = await listAnalyticsDatasets(200);
+  const dataset = datasets.find((item) => item.sourceKind === "research-data-source" && item.sourceRef === runId);
+  if (!dataset) return null;
+  const summarySource = isRecord(dataset.metadata?.summary) ? dataset.metadata.summary : {};
+  const summary = isResearchDataSourceDatasetSummary(dataset.metadata?.summary)
+    ? dataset.metadata.summary as ResearchDataSourceDatasetSummary
+    : {
+      runId,
+      candidateCount: Number(summarySource.candidateCount ?? 0),
+      frontierCount: Number(summarySource.frontierCount ?? 0),
+      providerCount: Number(summarySource.providerCount ?? 0),
+      dataSourceCount: Number(summarySource.dataSourceCount ?? dataset.rowCount ?? 0),
+      providerTypes: Array.isArray(summarySource.providerTypes) ? summarySource.providerTypes.map(String) : [],
+      sourceTypes: Array.isArray(summarySource.sourceTypes) ? summarySource.sourceTypes.map(String) : [],
+    };
+  return { dataset, summary };
+}
+
+function formatHandoffDataset(input: {
+  dataset: Awaited<ReturnType<typeof createAnalyticsDataset>>["dataset"];
+  summary: ResearchDataSourceDatasetSummary;
+  reused: boolean;
+}): Record<string, unknown> {
+  return {
+    id: input.dataset.id,
+    name: input.dataset.name,
+    sourceKind: input.dataset.sourceKind,
+    sourceRef: input.dataset.sourceRef,
+    rowCount: input.dataset.rowCount,
+    columnCount: input.dataset.columnCount,
+    reused: input.reused,
+    summary: input.summary,
+    metadata: input.dataset.metadata,
+  };
+}
+
+function isResearchDataSourceDatasetSummary(value: unknown): value is ResearchDataSourceDatasetSummary {
+  return Boolean(value && typeof value === "object" && "runId" in value && "candidateCount" in value && "frontierCount" in value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+async function appendContinueCrawlQueries(input: {
+  job: ResearchJob;
+  run: ResearchRun;
+  opportunity: AnalysisOpportunity;
+}): Promise<PlannedQuery[]> {
+  const plannedQueries: PlannedQuery[] = [];
+  const existingQueries = await listPlannedQueriesForRun(input.run.id);
+  const existingTexts = new Set(existingQueries.map((query) => query.text));
+  const derivedQueries = deriveContinueCrawlQueries(input);
+  for (const query of derivedQueries) {
+    if (existingTexts.has(query.text)) continue;
+    const saved = await appendPlannedQueryForRun({
+      jobId: input.job.id,
+      runId: input.run.id,
+      text: query.text,
+      purpose: query.purpose,
+      sourceTypes: query.sourceTypes,
+      language: query.language,
+      priority: query.priority,
+    });
+    plannedQueries.push(saved);
+  }
+  return plannedQueries;
+}
+
+function deriveContinueCrawlQueries(input: {
+  job: ResearchJob;
+  opportunity: AnalysisOpportunity;
+}): PlannedQuery[] {
+  const topic = input.job.topic.trim() || input.opportunity.topic.trim() || "研究主题";
+  const missingFields = input.opportunity.missingFields.slice(0, 6);
+  const sourceHints = input.opportunity.recommendedDataSources.slice(0, 4);
+  const queries: PlannedQuery[] = [];
+
+  for (const field of missingFields) {
+    queries.push({
+      id: "",
+      text: `${topic} ${field} 数据来源`,
+      purpose: "dataset-discovery",
+      sourceTypes: ["dataset", "data-catalog", "structured-api"],
+      language: /[\u4e00-\u9fff]/.test(`${topic} ${field}`) ? "mixed" : "en",
+      priority: 88,
+    });
+  }
+
+  for (const source of sourceHints) {
+    const sourceName = source.title?.trim() || source.kind.trim() || source.reason.trim();
+    queries.push({
+      id: "",
+      text: `${topic} ${sourceName} 结构化数据`,
+      purpose: "statistical-source",
+      sourceTypes: source.sourceType ? [source.sourceType] : ["dataset", "data-catalog", "structured-api"],
+      language: /[\u4e00-\u9fff]/.test(`${topic} ${sourceName}`) ? "mixed" : "en",
+      priority: Math.max(70, Math.round((source.qualityScore ?? 0.72) * 100)),
+    });
+  }
+
+  if (queries.length === 0) {
+    queries.push({
+      id: "",
+      text: `${topic} 补充结构化数据源`,
+      purpose: "dataset-discovery",
+      sourceTypes: ["dataset", "data-catalog", "structured-api"],
+      language: /[\u4e00-\u9fff]/.test(topic) ? "mixed" : "en",
+      priority: 80,
+    });
+  }
+
+  return queries;
 }
 
 function formatAnalysisHandoffResponse(input: {
