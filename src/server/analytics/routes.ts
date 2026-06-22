@@ -17,6 +17,9 @@ import {
 } from "./store";
 import { buildResearchDataSourceRows } from "./researchDataSources";
 import {
+  getAnalysisHandoffForRun,
+  getAnalysisOpportunityForRun,
+  initResearchSchema,
   listCrawlDocumentsForRun,
   listDiscoveryResultsForRun,
   listFrontierItemsForRun,
@@ -25,10 +28,11 @@ import {
 import { extractPdfDocument } from "../research/extractors/pdfExtractor";
 import { inspectStructuredBuffer } from "../research/extractors/structuredInspector";
 import { normalizeAnalysisKind, renderDatasetVisualization, runDatasetAnalysis } from "./jobs";
+import { buildTopicAnalysisPlan } from "./planner";
 import { DataSourceFetcher, materializeResearchDataSource, materializeResearchDataSources, refreshMaterializedDataSource } from "./sourceMaterializer";
 import { researchDocumentsToNewsRows } from "./newsAnalysis";
 import { VisualizationSuggestion } from "./types";
-import { CrawlDocument, DiscoveryResult, ExtractedTable, ExtractorKind, FrontierItem, SearchCandidate } from "../research/types";
+import type { AnalysisOpportunity, AnalysisOpportunityMode, CrawlDocument, DiscoveryResult, ExtractedTable, ExtractorKind, FrontierItem, SearchCandidate } from "../research/types";
 
 export interface AnalyticsRouterDependencies {
   listDocumentsForRun?: (runId: string) => Promise<CrawlDocument[]>;
@@ -227,6 +231,86 @@ export function createAnalyticsRouter(dependencies: AnalyticsRouterDependencies 
         ...result,
         summary,
       });
+    } catch (error) {
+      sendAnalyticsError(res, error);
+    }
+  });
+
+  router.get("/handoffs/research-run/:runId", async (req, res) => {
+    try {
+      await initResearchSchema();
+      const opportunity = await getAnalysisOpportunityForRun(req.params.runId);
+      const handoff = await getAnalysisHandoffForRun(req.params.runId);
+      if (!opportunity && !handoff) return res.status(404).json({ error: "analysis_handoff_not_found" });
+
+      const sourceDatasetId = handoff?.lineage.sourceDatasetId ?? handoff?.datasetIds[0];
+      const dataset = sourceDatasetId ? await getAnalyticsDataset(sourceDatasetId) : null;
+      const profile = dataset ? await getLatestDatasetProfile(dataset.id) : null;
+      const plan = opportunity
+        ? buildTopicAnalysisPlan({
+          opportunity,
+          handoff: handoff ?? undefined,
+          datasetId: dataset?.id,
+          sourceRegistryDatasetId: sourceDatasetId,
+          datasetProfile: profile?.profile ?? null,
+          sourceRows: dataset?.sampleRows ?? [],
+          mode: handoff?.decision ?? opportunity.recommendedAnalysisMode,
+          allowedOperations: handoff?.allowedOperations,
+        })
+        : null;
+
+      res.json({ opportunity, handoff, dataset, profile, plan });
+    } catch (error) {
+      sendAnalyticsError(res, error);
+    }
+  });
+
+  router.post("/plans/from-handoff/:runId", async (req, res) => {
+    try {
+      await initResearchSchema();
+      const opportunity = await getAnalysisOpportunityForRun(req.params.runId);
+      const handoff = await getAnalysisHandoffForRun(req.params.runId);
+      if (!opportunity) return res.status(404).json({ error: "analysis_opportunity_not_found" });
+
+      const requestedDatasetId = typeof req.body.datasetId === "string" ? req.body.datasetId : undefined;
+      const sourceDatasetId = requestedDatasetId ?? handoff?.lineage.sourceDatasetId ?? handoff?.datasetIds[0];
+      const dataset = sourceDatasetId ? await getAnalyticsDataset(sourceDatasetId) : null;
+      const profile = dataset ? await getLatestDatasetProfile(dataset.id) : null;
+      const plan = buildTopicAnalysisPlan({
+        opportunity,
+        handoff: handoff ?? undefined,
+        datasetId: dataset?.id,
+        sourceRegistryDatasetId: sourceDatasetId,
+        datasetProfile: profile?.profile ?? null,
+        sourceRows: dataset?.sampleRows ?? [],
+        mode: normalizePlanMode(req.body.mode) ?? handoff?.decision ?? opportunity.recommendedAnalysisMode,
+        allowedOperations: Array.isArray(req.body.allowedOperations) ? req.body.allowedOperations.map(String) : handoff?.allowedOperations,
+      });
+
+      res.status(201).json({ plan, opportunity, handoff, dataset, profile });
+    } catch (error) {
+      sendAnalyticsError(res, error);
+    }
+  });
+
+  router.post("/plans/topic", async (req, res) => {
+    try {
+      const topic = String(req.body.topic ?? "").trim();
+      if (!topic) return res.status(400).json({ error: "topic_required" });
+      const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+      const profile = rows.length > 0 ? profileRows({ rows }) : null;
+      const opportunity = syntheticOpportunityFromTopic({
+        topic,
+        mode: normalizePlanMode(req.body.mode) ?? "light_analysis",
+        profile,
+      });
+      const plan = buildTopicAnalysisPlan({
+        opportunity,
+        datasetProfile: profile,
+        sourceRows: rows,
+        mode: opportunity.recommendedAnalysisMode,
+      });
+      res.status(201).json({ plan, opportunity, profile });
     } catch (error) {
       sendAnalyticsError(res, error);
     }
@@ -819,6 +903,68 @@ function analyticsArtifactDir() {
 function analyticsImportMaxRows() {
   const configured = Number(process.env.ANALYTICS_IMPORT_MAX_ROWS ?? 50000);
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 50000;
+}
+
+function normalizePlanMode(value: unknown): AnalysisOpportunityMode | null {
+  const mode = String(value ?? "");
+  return ["report_only", "light_analysis", "full_analysis", "continue_crawl"].includes(mode)
+    ? mode as AnalysisOpportunityMode
+    : null;
+}
+
+function syntheticOpportunityFromTopic(input: {
+  topic: string;
+  mode: AnalysisOpportunityMode;
+  profile: ReturnType<typeof profileRows> | null;
+}): AnalysisOpportunity {
+  const availableFields = input.profile?.columns.map((column) => column.name) ?? [];
+  const marketLike = /(市场|销量|销售|营收|用户|人群|地区|价格|份额|market|sales|revenue|consumer|region)/i.test(input.topic);
+  const requiredFields = marketLike ? ["region", "time", "metric", "source"] : [];
+  const missingFields = requiredFields.filter((field) => !availableFields.some((available) => normalizeFieldName(available).includes(field)));
+  const score = input.profile && input.profile.rowCount > 0
+    ? Math.max(0.35, Math.min(0.82, input.profile.qualityScore * (missingFields.length ? 0.72 : 0.92)))
+    : 0.35;
+
+  return {
+    topic: input.topic,
+    researchRunId: "manual-topic",
+    taskType: marketLike ? "market-research" : "analytics",
+    canEnterDataLab: input.mode !== "report_only" && input.mode !== "continue_crawl",
+    recommendedAnalysisMode: input.mode,
+    score,
+    scoreBreakdown: {
+      structuredFieldDensity: input.profile ? Math.min(1, input.profile.columnCount / 8) : 0,
+      dimensionRichness: availableFields.length > 0 ? 0.55 : 0,
+      sourceQuality: 0.5,
+      evidenceCoverage: input.profile && input.profile.rowCount > 0 ? 0.6 : 0.2,
+      analysisValue: marketLike ? 0.75 : 0.52,
+      topicFit: marketLike ? 0.78 : 0.55,
+      weights: {
+        structuredFieldDensity: 0.2,
+        dimensionRichness: 0.18,
+        sourceQuality: 0.2,
+        evidenceCoverage: 0.16,
+        analysisValue: 0.16,
+        topicFit: 0.1,
+      },
+      finalScore: score,
+    },
+    decisionReason: "Data Lab topic planning request generated from a manual topic.",
+    candidateFeatures: availableFields,
+    requiredFields,
+    availableFields,
+    missingFields,
+    recommendedDataSources: [],
+    recommendedActions: missingFields.length > 0 ? ["补齐缺失字段后再运行完整分析"] : ["确认变量角色并运行分析计划"],
+    evidenceSummary: [],
+    warnings: input.profile ? input.profile.warnings : ["未提供数据行，规划只基于主题文本。"],
+    createdDatasetIds: [],
+    status: "ready",
+  };
+}
+
+function normalizeFieldName(value: string) {
+  return value.toLowerCase().replace(/[\s_-]+/g, "");
 }
 
 function sendAnalyticsError(res: any, error: unknown) {

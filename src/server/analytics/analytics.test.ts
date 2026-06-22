@@ -136,6 +136,18 @@ function testTopicAnalysisPlannerBuildsModeAwarePlan() {
   assert.ok(lightPlan.recommendedMethods.some((method) => method.kind === "linear-regression" && !method.allowed));
 }
 
+function testAnalyticsHandoffPlanningRoutesAreWired() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes('/handoffs/research-run/:runId'), "Analytics routes should expose Research handoff context loading");
+  assert.ok(routesSource.includes('/plans/from-handoff/:runId'), "Analytics routes should expose plan generation from a handoff");
+  assert.ok(routesSource.includes('/plans/topic'), "Analytics routes should expose topic-based plan generation");
+  assert.ok(routesSource.includes('buildTopicAnalysisPlan'), "Analytics routes should call the topic analysis planner");
+  assert.ok(routesSource.includes('syntheticOpportunityFromTopic'), "Analytics routes should synthesize a topic opportunity when no handoff exists");
+  assert.ok(routesSource.includes('getAnalysisHandoffForRun'), "Analytics routes should load the Research handoff");
+  assert.ok(routesSource.includes('getAnalysisOpportunityForRun'), "Analytics routes should load the Research opportunity");
+}
+
 function testAnalyticsWorkerCommand() {
   const command = buildAnalyticsWorkerCommand({
     command: "stats",
@@ -587,6 +599,7 @@ testProfileRows();
 testVisualizationSuggestions();
 testDescriptiveStatistics();
 testTopicAnalysisPlannerBuildsModeAwarePlan();
+testAnalyticsHandoffPlanningRoutesAreWired();
 testAnalyticsWorkerCommand();
 testAnalyticsJobKindMapping();
 testPlanCapabilitiesAreSurfaced();
