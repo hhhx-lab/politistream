@@ -31,7 +31,7 @@ import { normalizeAnalysisKind, renderDatasetVisualization, runDatasetAnalysis }
 import { buildTopicAnalysisPlan } from "./planner";
 import { DataSourceFetcher, materializeResearchDataSource, materializeResearchDataSources, refreshMaterializedDataSource } from "./sourceMaterializer";
 import { researchDocumentsToNewsRows } from "./newsAnalysis";
-import { VisualizationSuggestion } from "./types";
+import type { AnalyticsDatasetAsset, VisualizationSuggestion } from "./types";
 import type { AnalysisOpportunity, AnalysisOpportunityMode, CrawlDocument, DiscoveryResult, ExtractedTable, ExtractorKind, FrontierItem, SearchCandidate } from "../research/types";
 
 export interface AnalyticsRouterDependencies {
@@ -352,7 +352,7 @@ export function createAnalyticsRouter(dependencies: AnalyticsRouterDependencies 
           allowedKinds: allowedAnalysisKindsForMode(mode),
         });
       }
-      const result = await runDatasetAnalysis(req.params.id, kind);
+      const result = await runDatasetAnalysis(req.params.id, kind, analysisContextFromDataset(dataset, mode, req.body));
       res.status(201).json(result);
     } catch (error) {
       sendAnalyticsError(res, error);
@@ -962,6 +962,32 @@ function allowedAnalysisKindsForMode(mode: AnalysisOpportunityMode) {
 
 function isAnalysisKindAllowedForPlanMode(kind: string, mode: AnalysisOpportunityMode) {
   return allowedAnalysisKindsForMode(mode).includes(kind);
+}
+
+function analysisContextFromDataset(dataset: AnalyticsDatasetAsset, mode: AnalysisOpportunityMode | null, body: Record<string, unknown> = {}) {
+  const lineage = isRecord(dataset.metadata?.lineage) ? dataset.metadata.lineage : {};
+  return {
+    mode: mode ?? undefined,
+    handoffId: stringOrUndefined(body.handoffId ?? body.handoff_id ?? dataset.metadata?.analysisHandoffId ?? dataset.metadata?.handoffId),
+    opportunityId: stringOrUndefined(body.opportunityId ?? body.opportunity_id ?? dataset.metadata?.analysisOpportunityId),
+    planId: stringOrUndefined(body.planId ?? body.plan_id ?? dataset.metadata?.analysisPlanId),
+    researchRunId: stringOrUndefined(body.runId ?? body.researchRunId ?? body.research_run_id ?? dataset.metadata?.runId ?? lineage.runId),
+    researchJobId: stringOrUndefined(body.jobId ?? body.researchJobId ?? body.research_job_id ?? dataset.metadata?.jobId ?? lineage.jobId),
+    sourceRegistryDatasetId: stringOrUndefined(
+      body.sourceRegistryDatasetId
+      ?? body.source_registry_dataset_id
+      ?? dataset.metadata?.sourceRegistryDatasetId
+      ?? dataset.metadata?.materializedFromDatasetId
+      ?? lineage.sourceDatasetId
+      ?? lineage.parentDatasetId
+      ?? (dataset.sourceKind === "research-data-source" ? dataset.id : undefined),
+    ),
+  };
+}
+
+function stringOrUndefined(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || undefined;
 }
 
 function syntheticOpportunityFromTopic(input: {

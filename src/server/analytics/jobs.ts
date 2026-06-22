@@ -9,13 +9,37 @@ import { runAnalyticsWorker } from "./workerRunner";
 import { renderVisualizationArtifact } from "./visualization";
 import { AnalyticsJobKind, AnalyticsWorkerCommandName, VisualizationSuggestion } from "./types";
 
-export async function runDatasetAnalysis(datasetId: string, kind: AnalyticsJobKind = "descriptive-statistics") {
+export interface DatasetAnalysisContext {
+  mode?: string;
+  handoffId?: string;
+  opportunityId?: string;
+  planId?: string;
+  researchRunId?: string;
+  researchJobId?: string;
+  sourceRegistryDatasetId?: string;
+}
+
+export async function runDatasetAnalysis(
+  datasetId: string,
+  kind: AnalyticsJobKind = "descriptive-statistics",
+  context: DatasetAnalysisContext = {},
+) {
   let jobId: string | undefined;
   try {
     const dataset = await getAnalyticsDataset(datasetId);
     if (!dataset) throw Object.assign(new Error("analytics_dataset_not_found"), { statusCode: 404 });
 
     const workerCommand = workerCommandForKind(kind);
+    const lineage = {
+      datasetId,
+      mode: context.mode,
+      handoffId: context.handoffId,
+      opportunityId: context.opportunityId,
+      planId: context.planId,
+      researchRunId: context.researchRunId,
+      researchJobId: context.researchJobId,
+      sourceRegistryDatasetId: context.sourceRegistryDatasetId,
+    };
     const job = await createAnalyticsJob({
       datasetId: dataset.id,
       kind,
@@ -24,6 +48,7 @@ export async function runDatasetAnalysis(datasetId: string, kind: AnalyticsJobKi
         kind,
         engine: "python-worker",
         rowCount: dataset.rowCount,
+        analysisContext: lineage,
       },
     });
     jobId = job.id;
@@ -43,6 +68,8 @@ export async function runDatasetAnalysis(datasetId: string, kind: AnalyticsJobKi
         command: worker.command,
         durationMs: worker.durationMs,
         rowCount: analysisRows.length,
+        analysisContext: lineage,
+        lineage,
         result: worker.result,
       },
     });

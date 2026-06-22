@@ -158,6 +158,18 @@ function testLightweightHandoffRestrictionsAreEnforced() {
   assert.ok(researchRoutesSource.includes("analysisHandoffDecision: input.decision"), "Research-created source registry metadata should preserve the selected handoff mode");
 }
 
+function testHandoffLineageIsPreservedOnPlansJobsAndArtifacts() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const jobsSource = readFileSync(new URL("./jobs.ts", import.meta.url), "utf8");
+  const plannerSource = readFileSync(new URL("./planner.ts", import.meta.url), "utf8");
+
+  assert.ok(plannerSource.includes("handoffId: input.handoff?.id"), "planner output should preserve handoff id");
+  assert.ok(plannerSource.includes("sourceRegistryDatasetId"), "planner output should preserve source registry dataset id");
+  assert.ok(routesSource.includes("analysisContextFromDataset"), "analyze route should extract handoff lineage from dataset/request context");
+  assert.ok(jobsSource.includes("analysisContext: lineage"), "analytics job request should persist analysis lineage");
+  assert.ok(jobsSource.includes("lineage,"), "analytics artifact metadata should persist analysis lineage");
+}
+
 function testAnalyticsWorkerCommand() {
   const command = buildAnalyticsWorkerCommand({
     command: "stats",
@@ -611,6 +623,7 @@ testDescriptiveStatistics();
 testTopicAnalysisPlannerBuildsModeAwarePlan();
 testAnalyticsHandoffPlanningRoutesAreWired();
 testLightweightHandoffRestrictionsAreEnforced();
+testHandoffLineageIsPreservedOnPlansJobsAndArtifacts();
 testAnalyticsWorkerCommand();
 testAnalyticsJobKindMapping();
 testPlanCapabilitiesAreSurfaced();
