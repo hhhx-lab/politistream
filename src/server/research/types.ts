@@ -2,6 +2,10 @@ export type ResearchJobStatus = "active" | "paused" | "running" | "completed" | 
 export type ResearchRunStatus = "queued" | "planning" | "discovery" | "frontier" | "fetching" | "extracting" | "analyzing" | "reporting" | "completed" | "failed" | "paused" | "cancelled";
 export type ProviderName = "brave" | "serpapi" | "tavily" | "newsapi" | "rss" | "sitemap" | "github" | "npm" | "pypi" | "official" | "gdelt" | "wayback" | "commoncrawl" | "ckan" | "socrata" | "arcgis" | "kaggle" | "huggingface" | "openml" | "worldbank" | "fred" | "openalex" | "crossref" | "sports";
 export type ResearchTaskType = "survey" | "verification" | "tool-evaluation" | "policy" | "technical" | "competitive" | "monitoring" | "data-research" | "sports-analysis" | "analytics";
+export type AnalysisOpportunityTaskType = ResearchTaskType | "market-research" | "product-comparison" | "news-trace" | "unknown";
+export type AnalysisHandoffDecision = "report_only" | "light_analysis" | "full_analysis" | "continue_crawl";
+export type AnalysisOpportunityMode = "report_only" | "light_analysis" | "full_analysis" | "continue_crawl";
+export type AnalysisOpportunityStatus = "draft" | "ready" | "decided" | "failed";
 export type SourceType = "official" | "mainstream-news" | "technical-doc" | "github" | "package-registry" | "academic" | "regulatory" | "community" | "benchmark" | "company" | "rss" | "sitemap" | "dataset" | "data-catalog" | "structured-api" | "archive" | "sports-data" | "geospatial" | "financial-data" | "unknown";
 export type QueryPurpose = "overview" | "official-source" | "primary-source" | "news-coverage" | "contradiction" | "benchmark" | "community-feedback" | "technical-detail" | "pricing" | "timeline" | "dataset-discovery" | "statistical-source" | "competition-data" | "sports-data" | "visualization";
 export type CrawlStatus = "queued" | "fetched" | "failed" | "blocked" | "skipped";
@@ -66,6 +70,94 @@ export interface ResearchPlan {
   budget: ResearchBudget;
   stopConditions: string[];
   constraints: ResearchConstraints;
+}
+
+export interface AnalysisOpportunityScoreBreakdown {
+  structuredFieldDensity: number;
+  dimensionRichness: number;
+  sourceQuality: number;
+  evidenceCoverage: number;
+  analysisValue: number;
+  topicFit: number;
+  weights: {
+    structuredFieldDensity: number;
+    dimensionRichness: number;
+    sourceQuality: number;
+    evidenceCoverage: number;
+    analysisValue: number;
+    topicFit: number;
+  };
+  finalScore: number;
+}
+
+export interface AnalysisOpportunityDataSource {
+  kind: string;
+  url?: string;
+  title?: string;
+  reason: string;
+  provider?: string;
+  sourceType?: SourceType;
+  qualityScore?: number;
+}
+
+export interface AnalysisOpportunityEvidenceSummary {
+  claim?: string;
+  sourceUrl?: string;
+  support: string;
+  documentId?: string;
+}
+
+export interface AnalysisOpportunity {
+  id?: string;
+  topic: string;
+  researchRunId: string;
+  researchJobId?: string;
+  reportId?: string;
+  taskType: AnalysisOpportunityTaskType;
+  canEnterDataLab: boolean;
+  recommendedAnalysisMode: AnalysisOpportunityMode;
+  score: number;
+  scoreBreakdown: AnalysisOpportunityScoreBreakdown;
+  decisionReason: string;
+  candidateFeatures: string[];
+  requiredFields: string[];
+  availableFields: string[];
+  missingFields: string[];
+  recommendedDataSources: AnalysisOpportunityDataSource[];
+  recommendedActions: string[];
+  evidenceSummary: AnalysisOpportunityEvidenceSummary[];
+  warnings: string[];
+  userDecision?: AnalysisHandoffDecision;
+  handoffId?: string;
+  createdDatasetIds: string[];
+  status: AnalysisOpportunityStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AnalysisHandoff {
+  id?: string;
+  opportunityId: string;
+  researchRunId: string;
+  researchJobId?: string;
+  reportId?: string;
+  decision: AnalysisHandoffDecision;
+  targetPage: "research-report" | "research-discovery" | "sources" | "wizard";
+  topicId?: string;
+  datasetIds: string[];
+  planId?: string;
+  allowedOperations: string[];
+  nextActions: string[];
+  warnings: string[];
+  lineage: {
+    runId: string;
+    jobId?: string;
+    reportId?: string;
+    sourceDatasetId?: string;
+    opportunityId: string;
+  };
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ResearchJob {
