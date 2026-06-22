@@ -785,6 +785,7 @@ async function ensureResearchDataSourceRegistryDataset(input: {
   opportunity: AnalysisOpportunity;
   job: ResearchJob;
   run: ResearchRun;
+  decision: AnalysisHandoffDecision;
 }): Promise<{
   dataset: Awaited<ReturnType<typeof createAnalyticsDataset>>["dataset"];
   summary: ResearchDataSourceDatasetSummary;
@@ -822,6 +823,7 @@ async function ensureResearchDataSourceRegistryDataset(input: {
       jobId: input.job.id,
       topic: input.job.topic,
       analysisOpportunityId: input.opportunity.id,
+      analysisHandoffDecision: input.decision,
       recommendedAnalysisMode: input.opportunity.recommendedAnalysisMode,
       sourceDatasetType: "research-data-source-candidates",
       summary,

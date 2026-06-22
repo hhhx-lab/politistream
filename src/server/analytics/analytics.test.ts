@@ -148,6 +148,16 @@ function testAnalyticsHandoffPlanningRoutesAreWired() {
   assert.ok(routesSource.includes('getAnalysisOpportunityForRun'), "Analytics routes should load the Research opportunity");
 }
 
+function testLightweightHandoffRestrictionsAreEnforced() {
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const researchRoutesSource = readFileSync(new URL("../research/routes.ts", import.meta.url), "utf8");
+
+  assert.ok(routesSource.includes("analysis_mode_restricts_kind"), "Analytics analyze route should reject restricted jobs by mode");
+  assert.ok(routesSource.includes('if (mode === "light_analysis")'), "Analytics route should have an explicit lightweight allow-list");
+  assert.ok(routesSource.includes('"linear-regression"'), "Full mode should still list regression as an allowed kind");
+  assert.ok(researchRoutesSource.includes("analysisHandoffDecision: input.decision"), "Research-created source registry metadata should preserve the selected handoff mode");
+}
+
 function testAnalyticsWorkerCommand() {
   const command = buildAnalyticsWorkerCommand({
     command: "stats",
@@ -600,6 +610,7 @@ testVisualizationSuggestions();
 testDescriptiveStatistics();
 testTopicAnalysisPlannerBuildsModeAwarePlan();
 testAnalyticsHandoffPlanningRoutesAreWired();
+testLightweightHandoffRestrictionsAreEnforced();
 testAnalyticsWorkerCommand();
 testAnalyticsJobKindMapping();
 testPlanCapabilitiesAreSurfaced();

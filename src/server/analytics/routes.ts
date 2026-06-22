@@ -339,6 +339,19 @@ export function createAnalyticsRouter(dependencies: AnalyticsRouterDependencies 
   router.post("/datasets/:id/analyze", async (req, res) => {
     try {
       const kind = normalizeAnalysisKind(req.body.kind);
+      const dataset = await getAnalyticsDataset(req.params.id);
+      if (!dataset) return res.status(404).json({ error: "analytics_dataset_not_found" });
+      const mode = normalizePlanMode(req.body.mode)
+        ?? normalizePlanMode(dataset.metadata?.analysisHandoffDecision)
+        ?? normalizePlanMode(dataset.metadata?.recommendedAnalysisMode);
+      if (mode && !isAnalysisKindAllowedForPlanMode(kind, mode)) {
+        return res.status(403).json({
+          error: "analysis_mode_restricts_kind",
+          mode,
+          kind,
+          allowedKinds: allowedAnalysisKindsForMode(mode),
+        });
+      }
       const result = await runDatasetAnalysis(req.params.id, kind);
       res.status(201).json(result);
     } catch (error) {
@@ -910,6 +923,45 @@ function normalizePlanMode(value: unknown): AnalysisOpportunityMode | null {
   return ["report_only", "light_analysis", "full_analysis", "continue_crawl"].includes(mode)
     ? mode as AnalysisOpportunityMode
     : null;
+}
+
+function allowedAnalysisKindsForMode(mode: AnalysisOpportunityMode) {
+  if (mode === "report_only" || mode === "continue_crawl") {
+    return [];
+  }
+  if (mode === "light_analysis") {
+    return ["profile", "descriptive-statistics", "quality-report", "frequency-tables", "crosstab", "visualization-render"];
+  }
+  return [
+    "profile",
+    "descriptive-statistics",
+    "quality-report",
+    "frequency-tables",
+    "crosstab",
+    "statistical-tests",
+    "linear-regression",
+    "logistic-regression",
+    "poisson-regression",
+    "dimensionality-reduction",
+    "cluster-analysis",
+    "anomaly-detection",
+    "time-series-analysis",
+    "data-transformation",
+    "data-cleaning",
+    "news-organization",
+    "text-analysis",
+    "model-explanation",
+    "deep-learning-analysis",
+    "geospatial-analysis",
+    "publication-chart",
+    "report-draft",
+    "export-report",
+    "visualization-render",
+  ];
+}
+
+function isAnalysisKindAllowedForPlanMode(kind: string, mode: AnalysisOpportunityMode) {
+  return allowedAnalysisKindsForMode(mode).includes(kind);
 }
 
 function syntheticOpportunityFromTopic(input: {
