@@ -1,5 +1,5 @@
 export type AnalyticsCapabilityKind = "news-processing" | "data-profiling" | "statistics" | "machine-learning" | "visualization" | "reporting";
-export type VisualizationKind = "bar" | "line" | "scatter" | "histogram" | "box" | "heatmap" | "map" | "network" | "timeline" | "table";
+export type VisualizationKind = "bar" | "line" | "scatter" | "histogram" | "box" | "heatmap" | "pie" | "map" | "network" | "timeline" | "table";
 
 export interface AnalyticsCapability {
   id: string;
@@ -197,6 +197,74 @@ export interface CorrelationCell {
 export interface DescriptiveStatisticsResult {
   numericColumns: NumericColumnStats[];
   correlations: CorrelationCell[];
+}
+
+export type AnalyticsPlanMode = "report_only" | "light_analysis" | "full_analysis" | "continue_crawl";
+export type AnalyticsVariableRoleName = "target" | "metric" | "dimension" | "group" | "time" | "geography" | "identifier" | "text" | "unknown";
+
+export interface AnalyticsPlanQuestion {
+  id: string;
+  title: string;
+  rationale: string;
+  priority: number;
+}
+
+export interface AnalyticsVariableRole {
+  field: string;
+  role: AnalyticsVariableRoleName;
+  inferredType?: ProfileColumn["inferredType"];
+  confidence: number;
+  reason: string;
+}
+
+export interface AnalyticsFieldCoverage {
+  requiredFields: string[];
+  availableFields: string[];
+  missingFields: string[];
+  coverageRatio: number;
+}
+
+export interface AnalyticsMethodRecommendation {
+  id: string;
+  title: string;
+  kind: AnalyticsJobKind | "source-review" | "planning";
+  allowed: boolean;
+  reason: string;
+  requiredRoles: AnalyticsVariableRoleName[];
+  disabledReason?: string;
+}
+
+export interface AnalyticsChartRecommendation {
+  id: string;
+  kind: VisualizationKind;
+  title: string;
+  description: string;
+  fields: string[];
+  engine: VisualizationSuggestion["engine"];
+  allowed: boolean;
+}
+
+export interface TopicAnalysisPlan {
+  id: string;
+  topic: string;
+  mode: AnalyticsPlanMode;
+  questions: AnalyticsPlanQuestion[];
+  candidateVariables: string[];
+  variableRoles: AnalyticsVariableRole[];
+  fieldCoverage: AnalyticsFieldCoverage;
+  recommendedMethods: AnalyticsMethodRecommendation[];
+  recommendedCharts: AnalyticsChartRecommendation[];
+  risks: string[];
+  nextActions: string[];
+  restrictions: string[];
+  lineage: {
+    researchRunId?: string;
+    researchJobId?: string;
+    opportunityId?: string;
+    handoffId?: string;
+    datasetId?: string;
+    sourceRegistryDatasetId?: string;
+  };
 }
 
 export interface CreateAnalyticsDatasetInput {

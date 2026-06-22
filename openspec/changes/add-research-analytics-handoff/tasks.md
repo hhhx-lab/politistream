@@ -16,7 +16,7 @@
 
 ## 3. Analytics Planning and Data Lab Backend
 
-- [ ] 3.1 Add an analytics planner service that consumes AnalysisOpportunity, dataset profile, and source registry rows to produce questions, variable roles, recommended methods, recommended charts, field coverage, and risks.
+- [x] 3.1 Add an analytics planner service that consumes AnalysisOpportunity, dataset profile, and source registry rows to produce questions, variable roles, recommended methods, recommended charts, field coverage, and risks.
 - [ ] 3.2 Add Data Lab API support for loading handoff context and generating an analysis plan from a handoff or topic.
 - [ ] 3.3 Enforce lightweight-mode restrictions so profile, stats, and basic charts are allowed while regression, clustering, deep learning, and heavy exports are disabled until upgraded.
 - [ ] 3.4 Preserve handoff lineage on created datasets, analysis plans, jobs, and artifacts.

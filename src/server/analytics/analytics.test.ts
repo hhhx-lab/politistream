@@ -8,6 +8,7 @@ import { resolveAnalyticsArtifactFile } from "./routes";
 import { buildResearchDataSourceRows, scoreDataSourceQuality } from "./researchDataSources";
 import { inferMaterializeKind, selectDataSourceRow, selectDataSourceRows, sourceRowFromMaterializedDataset, validateMaterializeUrl } from "./sourceMaterializer";
 import { extractPdfTextTables } from "../research/extractors/pdfExtractor";
+import { buildTopicAnalysisPlan } from "./planner";
 
 function testCapabilityCatalog() {
   const capabilities = getAnalyticsCapabilities();
@@ -36,13 +37,18 @@ function testProfileRows() {
 function testVisualizationSuggestions() {
   const profile = profileRows({
     rows: [
-      { source: "Reuters", count: 12, date: "2026-06-01" },
-      { source: "AP", count: 8, date: "2026-06-02" },
+      { source: "Reuters", count: 12, reach: 120, date: "2026-06-01" },
+      { source: "AP", count: 8, reach: 80, date: "2026-06-02" },
+      { source: "BBC", count: 10, reach: 95, date: "2026-06-03" },
     ],
   });
   const suggestions = suggestVisualizations(profile);
   assert.ok(suggestions.find((suggestion) => suggestion.kind === "bar"));
+  assert.ok(suggestions.find((suggestion) => suggestion.kind === "pie"));
+  assert.ok(suggestions.find((suggestion) => suggestion.kind === "box"));
   assert.ok(suggestions.find((suggestion) => suggestion.kind === "line"));
+  assert.ok(suggestions.find((suggestion) => suggestion.kind === "scatter"));
+  assert.ok(suggestions.find((suggestion) => suggestion.kind === "heatmap"));
   assert.ok(suggestions.every((suggestion) => suggestion.exportFormats.length > 0));
 }
 
@@ -59,6 +65,75 @@ function testDescriptiveStatistics() {
   assert.ok(stats.numericColumns.find((column) => column.name === "x")?.standardError);
   assert.equal(stats.numericColumns.find((column) => column.name === "x")?.confidenceInterval95?.length, 2);
   assert.equal(Math.round((stats.correlations[0]?.correlation ?? 0) * 100), 100);
+}
+
+function testTopicAnalysisPlannerBuildsModeAwarePlan() {
+  const profile = profileRows({
+    rows: [
+      { region: "华东", revenue: 120, brand: "A", year: "2026" },
+      { region: "华南", revenue: 98, brand: "B", year: "2026" },
+    ],
+  });
+  const opportunity = {
+    id: "opp-1",
+    topic: "全国避孕套市场",
+    researchRunId: "run-1",
+    researchJobId: "job-1",
+    taskType: "market-research" as const,
+    canEnterDataLab: true,
+    recommendedAnalysisMode: "full_analysis" as const,
+    score: 0.82,
+    scoreBreakdown: {
+      structuredFieldDensity: 0.8,
+      dimensionRichness: 0.8,
+      sourceQuality: 0.8,
+      evidenceCoverage: 0.8,
+      analysisValue: 0.8,
+      topicFit: 0.8,
+      weights: {
+        structuredFieldDensity: 0.2,
+        dimensionRichness: 0.18,
+        sourceQuality: 0.2,
+        evidenceCoverage: 0.16,
+        analysisValue: 0.16,
+        topicFit: 0.1,
+      },
+      finalScore: 0.8,
+    },
+    decisionReason: "市场题材且字段充分。",
+    candidateFeatures: ["region", "revenue", "brand", "year"],
+    requiredFields: ["region", "revenue", "year", "purchase_rate"],
+    availableFields: ["region", "revenue", "brand", "year"],
+    missingFields: ["purchase_rate"],
+    recommendedDataSources: [],
+    recommendedActions: [],
+    evidenceSummary: [],
+    warnings: [],
+    createdDatasetIds: [],
+    status: "ready" as const,
+  };
+
+  const plan = buildTopicAnalysisPlan({
+    opportunity,
+    datasetId: "dataset-1",
+    datasetProfile: profile,
+    mode: "full_analysis",
+  });
+  assert.equal(plan.mode, "full_analysis");
+  assert.ok(plan.questions.some((question) => question.id === "compare-by-dimension"));
+  assert.ok(plan.variableRoles.some((role) => role.field === "revenue" && role.role === "metric"));
+  assert.ok(plan.fieldCoverage.missingFields.includes("purchase_rate"));
+  assert.ok(plan.recommendedMethods.some((method) => method.kind === "linear-regression"));
+  assert.ok(plan.recommendedCharts.some((chart) => chart.kind === "bar"));
+
+  const lightPlan = buildTopicAnalysisPlan({
+    opportunity,
+    datasetProfile: profile,
+    mode: "light_analysis",
+    allowedOperations: ["profile", "stats", "chart"],
+  });
+  assert.ok(lightPlan.restrictions.some((restriction) => restriction.includes("profile、stats、chart")));
+  assert.ok(lightPlan.recommendedMethods.some((method) => method.kind === "linear-regression" && !method.allowed));
 }
 
 function testAnalyticsWorkerCommand() {
@@ -180,6 +255,39 @@ function testVisualizationArtifact() {
   assert.ok(artifact.reproducibleCode.includes("source"));
   assert.deepEqual((artifact.spec as any).xAxis.data, ["Reuters", "AP"]);
   assert.deepEqual((artifact.spec as any).series[0].data, [12, 8]);
+}
+
+function testVisualizationArtifactsForAdvancedCharts() {
+  const rows = [
+    { region: "华东", marketSize: 120, birthRate: 6.2, channel: "电商" },
+    { region: "华南", marketSize: 90, birthRate: 7.1, channel: "线下" },
+    { region: "华东", marketSize: 80, birthRate: 5.8, channel: "药店" },
+  ];
+  const suggestions = suggestVisualizations(profileRows({ rows }));
+
+  const pie = renderVisualizationArtifact({
+    rows,
+    suggestion: suggestions.find((suggestion) => suggestion.kind === "pie")!,
+  });
+  assert.equal(pie.kind, "pie");
+  assert.equal((pie.spec as any).series[0].type, "pie");
+  assert.ok((pie.spec as any).series[0].data.length >= 2);
+
+  const box = renderVisualizationArtifact({
+    rows,
+    suggestion: suggestions.find((suggestion) => suggestion.kind === "box")!,
+  });
+  assert.equal(box.kind, "box");
+  assert.ok((box.spec as any).groups[0].median >= 0);
+  assert.ok((box.spec as any).groups[0].count >= 1);
+
+  const heatmap = renderVisualizationArtifact({
+    rows,
+    suggestion: suggestions.find((suggestion) => suggestion.kind === "heatmap")!,
+  });
+  assert.equal(heatmap.kind, "heatmap");
+  assert.equal((heatmap.spec as any).series[0].type, "heatmap");
+  assert.ok((heatmap.spec as any).series[0].data.length >= 4);
 }
 
 function testArtifactFileResolution() {
@@ -478,10 +586,12 @@ testCapabilityCatalog();
 testProfileRows();
 testVisualizationSuggestions();
 testDescriptiveStatistics();
+testTopicAnalysisPlannerBuildsModeAwarePlan();
 testAnalyticsWorkerCommand();
 testAnalyticsJobKindMapping();
 testPlanCapabilitiesAreSurfaced();
 testVisualizationArtifact();
+testVisualizationArtifactsForAdvancedCharts();
 testArtifactFileResolution();
 testPdfTextTableExtraction();
 testDataLabSurfacesAdvancedTools();
