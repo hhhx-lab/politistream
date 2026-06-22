@@ -25,7 +25,7 @@
 
 - [x] 4.1 Add `AnalysisDecisionPanel` to the Research run results surface with topic type, score, candidate features, data assets, recommendation, and actions.
 - [x] 4.2 Add `AnalysisOpportunityDrawer` to show score breakdown, evidence URLs, available fields, missing fields, source recommendations, and warnings.
-- [ ] 4.3 Wire Research UI actions for report-only, lightweight analysis, full analysis, continue crawling, loading, success, and error states.
+- [x] 4.3 Wire Research UI actions for report-only, lightweight analysis, full analysis, continue crawling, loading, success, and error states.
 - [ ] 4.4 Update Data Lab focus/context handling so handoff routes open `sources` or `wizard` with topic, run id, report id, recommended mode, candidate features, missing fields, and source registry context.
 - [ ] 4.5 Update Data Lab wizard/context UI to show field coverage, recommended methods, recommended charts, risks, and lightweight-mode restrictions.
 

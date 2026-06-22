@@ -956,6 +956,15 @@ function testResearchAnalysisDecisionUiIsWired() {
   assert.ok(decisionSource.includes("missingFields"), "Analysis drawer should show missing fields");
 }
 
+function testResearchAnalysisDecisionUiStatesAreWired() {
+  const panelSource = readFileSync(new URL("../../components/ResearchPanel.tsx", import.meta.url), "utf8");
+
+  assert.ok(panelSource.includes('setAnalysisDecisionBusy(\'opportunity\')'), "Research UI should mark opportunity generation as loading");
+  assert.ok(panelSource.includes('setAnalysisDecisionBusy(decision)'), "Research UI should mark handoff decisions as loading");
+  assert.ok(panelSource.includes('setAnalysisDecisionError(text)'), "Research UI should surface handoff errors");
+  assert.ok(panelSource.includes("已记录分析交接决策"), "Research UI should surface success feedback");
+}
+
 async function testProviderLiveSmokeHandlesConfiguredAndMissingProviders() {
   const result = await runProviderLiveSmoke({
     topic: "document conversion tools",
@@ -1196,6 +1205,7 @@ testAnalysisReportOnlyHandoffStaysSideEffectFree();
 testAnalysisFullHandoffCarriesWizardMetadata();
 testAnalysisContinueCrawlHandoffAddsFollowUpDiscovery();
 testResearchAnalysisDecisionUiIsWired();
+testResearchAnalysisDecisionUiStatesAreWired();
 await testProviderLiveSmokeHandlesConfiguredAndMissingProviders();
 testPressureSmokeExposesStandardAndDeepBudgets();
 await testDataSourceLiveSmokeUsesPublicDiscoveryProviders();
