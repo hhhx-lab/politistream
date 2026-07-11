@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import app from "../server";
+import app from "../server.js";
 
 export default function handler(req: IncomingMessage, res: ServerResponse) {
   const requestUrl = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
