@@ -14,3 +14,4 @@ news.db-shm
 news.db-wal
 workers-analytics/.venv/
 workers-analytics/**/__pycache__/
+.vercel

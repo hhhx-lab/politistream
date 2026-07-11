@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "sh -c 'npm run dev:backend & backend=$!; npm run dev:frontend; kill $backend 2>/dev/null'",
     "start:all": "node scripts/start-all.mjs",
-    "dev:backend": "tsx server.ts",
+    "dev:backend": "tsx server-local.ts",
     "dev:frontend": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",

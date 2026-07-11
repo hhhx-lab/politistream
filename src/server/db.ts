@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 
-const dbPath = "news.db";
+const dbPath = process.env.VERCEL ? path.join("/tmp", "politistream-news.db") : "news.db";
 let db: Database.Database;
 
 try {

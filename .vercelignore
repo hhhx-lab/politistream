@@ -1,0 +1,6 @@
+archives/
+.data/
+news.db
+news.db-shm
+news.db-wal
+workers-analytics/

@@ -2,7 +2,10 @@ import fs from "fs";
 import path from "path";
 import { NewsItem } from "../db";
 
-const ARCHIVE_DIR = path.join(process.cwd(), "archives");
+const localArchiveDirName = String.fromCharCode(97, 114, 99, 104, 105, 118, 101, 115);
+const ARCHIVE_DIR = process.env.VERCEL
+  ? path.join("/tmp", "politistream-archives")
+  : path.join(process.cwd(), localArchiveDirName);
 
 /**
  * 确保存档目录存在

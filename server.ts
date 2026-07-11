@@ -16,18 +16,12 @@ import {
   processMissingSummaries,
   refreshRSSSource,
 } from "./src/server/services/rss";
-import { sendResearchConfigStatus } from "./src/server/research/http";
-import { createResearchRouter } from "./src/server/research/routes";
-import { startResearchWorkers } from "./src/server/research/workers/worker";
 import { getServerRuntimeConfig } from "./src/server/runtime";
-import { createAnalyticsCompatibilityRouter, createAnalyticsRouter } from "./src/server/analytics/routes";
-import { createNewsAnalysisRouter } from "./src/server/analytics/newsAnalysis";
-import { createAgentRouter } from "./src/server/agent/routes";
 
 // ... (rest of imports)
 
 const app = express();
-const runtime = getServerRuntimeConfig();
+export const runtime = getServerRuntimeConfig();
 
 app.use(createCorsMiddleware(runtime.appUrl));
 app.use(express.json({ limit: "25mb" }));
@@ -61,12 +55,26 @@ app.get("/api/runtime/status", (req, res) => {
   });
 });
 
-app.get("/api/research/status", sendResearchConfigStatus);
-app.use("/api/research", createResearchRouter());
-app.use("/api/analytics", createAnalyticsRouter());
-app.use("/api", createAnalyticsCompatibilityRouter());
-app.use("/api/news-analysis", createNewsAnalysisRouter());
-app.use("/api/agent", createAgentRouter());
+if (process.env.VERCEL) {
+  app.get("/api/research/status", (_req, res) => {
+    res.status(503).json({
+      ok: false,
+      mode: "serverless_demo",
+      error: "research_worker_requires_postgres_redis_and_a_persistent_runtime",
+    });
+  });
+
+  const unavailable = (_req: express.Request, res: express.Response) => {
+    res.status(503).json({
+      error: "This capability requires the local PolitiStream worker runtime.",
+      mode: "serverless_demo",
+    });
+  };
+  app.use("/api/research", unavailable);
+  app.use("/api/analytics", unavailable);
+  app.use("/api/news-analysis", unavailable);
+  app.use("/api/agent", unavailable);
+}
 
 function sendRSSSourceError(res: express.Response, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -205,19 +213,7 @@ app.post("/api/refresh", async (req, res) => {
   }
 });
 
-async function startServer() {
-  app.listen(runtime.port, "0.0.0.0", () => {
-    console.log(`API server running on http://localhost:${runtime.port}`);
-    startResearchWorkers();
-    if (runtime.refreshRssOnStartup) {
-      fetchAndProcessFeeds().catch(console.error);
-    } else {
-      console.log("RSS startup refresh disabled. Use POST /api/refresh to fetch feeds.");
-    }
-  });
-}
-
-startServer();
+export default app;
 
 function createCorsMiddleware(appUrl: string) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
