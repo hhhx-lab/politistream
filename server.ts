@@ -17,6 +17,11 @@ import {
   refreshRSSSource,
 } from "./src/server/services/rss";
 import { getServerRuntimeConfig } from "./src/server/runtime";
+import { sendResearchConfigStatus } from "./src/server/research/http";
+import { createResearchRouter } from "./src/server/research/routes";
+import { createAnalyticsCompatibilityRouter, createAnalyticsRouter } from "./src/server/analytics/routes";
+import { createNewsAnalysisRouter } from "./src/server/analytics/newsAnalysis";
+import { createAgentRouter } from "./src/server/agent/routes";
 
 // ... (rest of imports)
 
@@ -55,26 +60,12 @@ app.get("/api/runtime/status", (req, res) => {
   });
 });
 
-if (process.env.VERCEL) {
-  app.get("/api/research/status", (_req, res) => {
-    res.status(503).json({
-      ok: false,
-      mode: "serverless_demo",
-      error: "research_worker_requires_postgres_redis_and_a_persistent_runtime",
-    });
-  });
-
-  const unavailable = (_req: express.Request, res: express.Response) => {
-    res.status(503).json({
-      error: "This capability requires the local PolitiStream worker runtime.",
-      mode: "serverless_demo",
-    });
-  };
-  app.use("/api/research", unavailable);
-  app.use("/api/analytics", unavailable);
-  app.use("/api/news-analysis", unavailable);
-  app.use("/api/agent", unavailable);
-}
+app.get("/api/research/status", sendResearchConfigStatus);
+app.use("/api/research", createResearchRouter());
+app.use("/api/analytics", createAnalyticsRouter());
+app.use("/api", createAnalyticsCompatibilityRouter());
+app.use("/api/news-analysis", createNewsAnalysisRouter());
+app.use("/api/agent", createAgentRouter());
 
 function sendRSSSourceError(res: express.Response, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
