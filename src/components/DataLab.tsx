@@ -128,6 +128,7 @@ const text = {
     queryFieldsPlaceholder: 'source,count',
     operationResult: '操作结果',
     operationHistory: '最近操作',
+    planRunResult: '完整分析流水线结果',
     validationResult: '质量校验结果',
     cleaningResult: '清洗结果',
     queryResult: '查询结果',
@@ -167,6 +168,9 @@ const text = {
     handoffTopic: '研究课题',
     handoffReport: '报告',
     handoffCandidateFeatures: '候选特征',
+    sourceAnalysisHints: '可分析字段线索',
+    sourceAnalysisNextStep: '分析下一步',
+    openWizardWithDataset: '用该数据集分析',
     handoffRequiredFields: '必需字段',
     handoffAvailableFields: '已有字段',
     handoffMissingFields: '缺失字段',
@@ -211,6 +215,19 @@ const text = {
     artifacts: '分析资产',
     capabilities: '能力目录',
     chartSuggestions: '图表建议',
+    chartStudio: '图表工作台',
+    chartStudioHint: '选择图表类型和字段映射，直接生成可预览、可导出的图表资产。',
+    chartKind: '图表类型',
+    xField: 'X / 分组字段',
+    yField: 'Y / 数值字段',
+    colorField: '颜色 / 分面字段',
+    chartTitle: '图表标题',
+    renderCurrentChart: '渲染当前图表',
+    renderRecommendedCharts: '批量生成推荐图表',
+    reportComposer: '报告生成器',
+    reportComposerHint: '基于当前分析计划和数据集生成报告包，并从资产中导出 Markdown、HTML、DOCX、PDF 或 PPTX。',
+    generateReportPackage: '生成报告包',
+    latestReports: '最近报告',
     renderChart: '生成交互图',
     files: '可下载文件',
     details: '摘要',
@@ -305,6 +322,7 @@ const text = {
     queryFieldsPlaceholder: 'source,count',
     operationResult: 'Operation result',
     operationHistory: 'Recent operations',
+    planRunResult: 'Full analysis pipeline result',
     validationResult: 'Validation result',
     cleaningResult: 'Cleaning result',
     queryResult: 'Query result',
@@ -344,6 +362,9 @@ const text = {
     handoffTopic: 'Topic',
     handoffReport: 'Report',
     handoffCandidateFeatures: 'Candidate features',
+    sourceAnalysisHints: 'Analysis field hints',
+    sourceAnalysisNextStep: 'Analysis next step',
+    openWizardWithDataset: 'Analyze this dataset',
     handoffRequiredFields: 'Required fields',
     handoffAvailableFields: 'Available fields',
     handoffMissingFields: 'Missing fields',
@@ -388,6 +409,19 @@ const text = {
     artifacts: 'Artifacts',
     capabilities: 'Capability catalog',
     chartSuggestions: 'Chart suggestions',
+    chartStudio: 'Chart Studio',
+    chartStudioHint: 'Pick chart type and field mappings, then render a previewable and exportable chart artifact.',
+    chartKind: 'Chart type',
+    xField: 'X / group field',
+    yField: 'Y / numeric field',
+    colorField: 'Color / facet field',
+    chartTitle: 'Chart title',
+    renderCurrentChart: 'Render current chart',
+    renderRecommendedCharts: 'Batch render recommended charts',
+    reportComposer: 'Report Composer',
+    reportComposerHint: 'Generate a report package from the current analysis plan and dataset, then export Markdown, HTML, DOCX, PDF, or PPTX from artifacts.',
+    generateReportPackage: 'Generate report package',
+    latestReports: 'Latest reports',
     renderChart: 'Render chart',
     files: 'Downloadable files',
     details: 'Summary',
@@ -523,6 +557,11 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
   const [materializeResults, setMaterializeResults] = useState<MaterializeResultState[]>([]);
   const [handoffContext, setHandoffContext] = useState<DataLabHandoffContext | null>(null);
   const [handoffContextBusy, setHandoffContextBusy] = useState(false);
+  const [chartKind, setChartKind] = useState('bar');
+  const [chartX, setChartX] = useState('');
+  const [chartY, setChartY] = useState('');
+  const [chartColor, setChartColor] = useState('');
+  const [chartTitle, setChartTitle] = useState('');
   const [appliedFocusKey, setAppliedFocusKey] = useState('');
   const [busyKind, setBusyKind] = useState<string>('');
   const [error, setError] = useState('');
@@ -545,10 +584,33 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
     () => selectedDataset ? buildMaterializedVersionHistory(selectedDataset, datasets) : [],
     [selectedDataset, datasets],
   );
+  const chartFieldOptions = useMemo(() => profile?.columns.map((column) => ({
+    name: column.name,
+    type: column.inferredType,
+  })) ?? inferFieldOptionsFromRows(selectedDataset?.sampleRows ?? []), [profile, selectedDataset?.sampleRows]);
+  const numericFieldOptions = useMemo(
+    () => chartFieldOptions.filter((field) => ['number', 'integer', 'float', 'numeric'].includes(field.type)),
+    [chartFieldOptions],
+  );
+  const reportArtifacts = useMemo(
+    () => artifacts.filter((artifact) => artifact.artifactType === 'report' && (!selectedDatasetId || artifact.datasetId === selectedDatasetId)).slice(0, 6),
+    [artifacts, selectedDatasetId],
+  );
 
   useEffect(() => {
     loadAll();
   }, []);
+
+  useEffect(() => {
+    const suggested = suggestions[0];
+    const firstNumeric = numericFieldOptions[0]?.name ?? '';
+    const firstCategorical = chartFieldOptions.find((field) => field.name !== firstNumeric)?.name ?? chartFieldOptions[0]?.name ?? '';
+    setChartKind((current) => current || suggested?.kind || 'bar');
+    setChartX((current) => current || suggested?.x || firstCategorical);
+    setChartY((current) => current || suggested?.y || firstNumeric);
+    setChartColor((current) => current || suggested?.color || '');
+    setChartTitle((current) => current || suggested?.title || (selectedDataset ? `${selectedDataset.name} chart` : ''));
+  }, [suggestions, chartFieldOptions, numericFieldOptions, selectedDataset?.id]);
 
   const loadAll = async () => {
     await Promise.all([loadCapabilities(), loadDatasets(), loadAnalyticsActivity()]);
@@ -829,6 +891,66 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
       await loadAnalyticsActivity();
     } catch (workerError) {
       setError(workerError instanceof Error ? workerError.message : String(workerError));
+    } finally {
+      setBusyKind('');
+    }
+  };
+
+  const runAnalysisPlan = async (input: { kinds: AnalyticsJobKindSummary[]; includeCharts: boolean; includeReport: boolean }) => {
+    setBusyKind('analysis-plan-run');
+    setError('');
+    try {
+      const datasetId = await ensureDatasetId();
+      const res = await fetch(`/api/analytics/datasets/${datasetId}/run-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan: handoffContext?.plan,
+          mode: handoffContext?.plan?.mode ?? handoffContext?.handoff?.decision ?? handoffContext?.opportunity?.recommendedAnalysisMode ?? 'full_analysis',
+          kinds: input.kinds,
+          includeCharts: input.includeCharts,
+          includeReport: input.includeReport,
+          chartLimit: input.includeCharts ? 5 : 0,
+          runId: handoffContext?.opportunity?.researchRunId ?? handoffContext?.handoff?.lineage?.runId,
+          handoffId: handoffContext?.handoff?.id,
+          opportunityId: handoffContext?.opportunity ? String((handoffContext.opportunity as Record<string, unknown>).id ?? '') : undefined,
+          planId: handoffContext?.plan?.id,
+          topic: handoffContext?.plan?.topic ?? handoffContext?.opportunity?.topic ?? datasetName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
+      const methodResults = Array.isArray(data.methods) ? data.methods : [];
+      const lastMethod = [...methodResults].reverse().find((item) => isRecord(item) && item.ok && isRecord(item.job));
+      setWorkerJob(isRecord(lastMethod?.job) ? lastMethod.job as unknown as AnalyticsJobSummary : null);
+      setWorkerPayload(data as Record<string, unknown>);
+      const rendered = Array.isArray(data.visualizations)
+        ? data.visualizations.find((item: unknown) => isRecord(item) && item.ok && isRecord(item.artifact))
+        : null;
+      if (isRecord(rendered?.artifact)) {
+        setVisualizationArtifact(rendered.artifact as unknown as VisualizationArtifactSummary);
+      }
+      recordDatasetOperationPayload({
+        operation: copy.planRunResult,
+        endpoint: `/api/analytics/datasets/${datasetId}/run-plan`,
+        summary: data.summary,
+        sequence: data.sequence,
+        methods: methodResults.map((item: unknown) => isRecord(item) ? {
+          kind: item.kind,
+          ok: item.ok,
+          artifactId: isRecord(item.artifact) ? item.artifact.id : undefined,
+          error: item.error,
+        } : item),
+        visualizations: Array.isArray(data.visualizations) ? data.visualizations.map((item: unknown) => isRecord(item) ? {
+          kind: item.kind,
+          ok: item.ok,
+          artifactId: isRecord(item.storedArtifact) ? item.storedArtifact.id : undefined,
+          error: item.error,
+        } : item) : [],
+      });
+      await loadAnalyticsActivity();
+    } catch (planError) {
+      setError(planError instanceof Error ? planError.message : String(planError));
     } finally {
       setBusyKind('');
     }
@@ -1158,6 +1280,53 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
     }
   };
 
+  const renderChartStudioVisualization = async () => {
+    const suggestion: VisualizationSuggestionSummary = {
+      id: `chart-studio-${chartKind}-${chartX || 'x'}-${chartY || 'y'}`,
+      kind: chartKind,
+      title: chartTitle.trim() || `${chartKind} / ${chartX || chartY || selectedDataset?.name || 'dataset'}`,
+      description: copy.chartStudioHint,
+      x: chartX || undefined,
+      y: chartY || undefined,
+      color: chartColor || undefined,
+      engine: chartKind === 'table' ? 'html' : chartKind === 'line' || chartKind === 'scatter' ? 'plotly' : 'echarts',
+      exportFormats: chartKind === 'table' ? ['html'] : chartKind === 'line' || chartKind === 'scatter' ? ['png', 'svg', 'html'] : ['png', 'svg', 'pdf'],
+    };
+    await renderVisualization(suggestion);
+  };
+
+  const renderRecommendedChartBatch = async () => {
+    await runAnalysisPlan({ kinds: ['visualization-render'], includeCharts: true, includeReport: false });
+  };
+
+  const generateReportPackage = async () => {
+    await runAnalysisPlan({ kinds: ['report-draft', 'export-report'], includeCharts: false, includeReport: true });
+  };
+
+  const openDatasetInWizard = async (dataset: AnalyticsDatasetSummary) => {
+    selectDatasetSummary(dataset, { clearOperation: false });
+    setActivePage('wizard');
+    if (!dataset.id) return;
+    try {
+      const res = await fetch(`/api/analytics/datasets/${dataset.id}`);
+      const data = await res.json();
+      if (res.ok && isRecord(data.dataset)) {
+        const fullDataset = data.dataset as unknown as AnalyticsDatasetSummary;
+        setDatasets((current) => current.some((item) => item.id === fullDataset.id)
+          ? current.map((item) => item.id === fullDataset.id ? fullDataset : item)
+          : [fullDataset, ...current]);
+        selectDatasetSummary(fullDataset, { clearOperation: false });
+        if (isRecord(data.profile)) {
+          const profileRecord = data.profile as { profile?: DatasetProfileSummary; suggestions?: VisualizationSuggestionSummary[] };
+          if (profileRecord.profile) setProfile(profileRecord.profile);
+          if (Array.isArray(profileRecord.suggestions)) setSuggestions(profileRecord.suggestions);
+        }
+      }
+    } catch {
+      // The minimal materialized dataset is still selected; the wizard can run validation/profile on demand.
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto bg-[#F1EFE7] text-[#151515]">
       <div className="mx-auto max-w-[1500px] p-5 lg:p-8">
@@ -1371,7 +1540,7 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
           )}
 
           {activePage === 'wizard' && (
-            <DataLabAnalysisWizard language={language} copy={copy} dataset={selectedDataset} profile={profile} suggestions={suggestions} handoffContext={handoffContext} busyKind={busyKind} onRunAnalysis={runWorkerAnalysis} onRenderVisualization={renderVisualization} />
+            <DataLabAnalysisWizard language={language} copy={copy} dataset={selectedDataset} profile={profile} suggestions={suggestions} handoffContext={handoffContext} busyKind={busyKind} onRunAnalysis={runWorkerAnalysis} onRunPlan={runAnalysisPlan} onRenderVisualization={renderVisualization} />
           )}
 
           {activePage === 'analysis' && (
@@ -1406,19 +1575,92 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
           )}
 
           {activePage === 'visuals' && (
-            <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_25rem]">
-              <WorkerResultPanel workerJob={workerJob} workerPayload={workerPayload} visualizationArtifact={visualizationArtifact} datasetOperationPayload={datasetOperationPayload} datasetOperationHistory={datasetOperationHistory} copy={copy} />
-              <Panel title={copy.chartSuggestions} icon={<LineChart size={18} />} accent="#6C4AB6">
-                <div className="space-y-2">
-                  {suggestions.length === 0 ? <p className="text-sm text-stone-500">{copy.empty}</p> : suggestions.slice(0, 8).map((suggestion) => (
-                    <button key={suggestion.id} onClick={() => renderVisualization(suggestion)} className="w-full border border-stone-300 bg-white p-3 text-left hover:border-[#151515]">
-                      <div className="font-mono text-[10px] uppercase text-stone-500">{suggestion.kind} / {suggestion.engine}</div>
-                      <div className="mt-1 font-serif text-lg">{suggestion.title}</div>
-                      <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-stone-500"><span>{suggestion.exportFormats.join(' / ')}</span><span className="inline-flex items-center gap-1"><Play size={12} />{copy.renderChart}</span></div>
-                    </button>
-                  ))}
-                </div>
-              </Panel>
+            <section className="space-y-5">
+              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,0.8fr)]">
+                <Panel title={copy.chartStudio} icon={<LineChart size={18} />} accent="#6C4AB6">
+                  <div className="space-y-4">
+                    <p className="text-sm leading-6 text-stone-600">{copy.chartStudioHint}</p>
+                    {selectedDataset ? <DatasetSummaryBlock dataset={selectedDataset} profile={profile} copy={copy} /> : <EmptyBlock text={copy.noDataset} />}
+                    <div className="grid gap-3 lg:grid-cols-4">
+                      <label className="space-y-1">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.chartKind}</span>
+                        <select value={chartKind} onChange={(event) => setChartKind(event.target.value)} className="w-full border-2 border-stone-300 bg-white px-3 py-2 text-xs outline-none focus:border-[#151515]">
+                          {['bar', 'line', 'scatter', 'histogram', 'pie', 'box', 'heatmap', 'table'].map((kind) => <option key={kind} value={kind}>{kind}</option>)}
+                        </select>
+                      </label>
+                      <FieldSelect label={copy.xField} value={chartX} fields={chartFieldOptions} onChange={setChartX} />
+                      <FieldSelect label={copy.yField} value={chartY} fields={chartFieldOptions} onChange={setChartY} />
+                      <FieldSelect label={copy.colorField} value={chartColor} fields={chartFieldOptions} onChange={setChartColor} optional />
+                    </div>
+                    <input value={chartTitle} onChange={(event) => setChartTitle(event.target.value)} placeholder={copy.chartTitle} className="w-full border-2 border-stone-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#151515]" />
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ActionButton active={busyKind === 'visualization-render'} onClick={renderChartStudioVisualization} icon={<Play size={14} />} label={copy.renderCurrentChart} tone="dark" />
+                      <ActionButton active={busyKind === 'analysis-plan-run'} onClick={renderRecommendedChartBatch} icon={<BarChart3 size={14} />} label={copy.renderRecommendedCharts} />
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <MiniMetric label={copy.xField} value={chartX || '-'} />
+                      <MiniMetric label={copy.yField} value={chartY || '-'} />
+                      <MiniMetric label={copy.colorField} value={chartColor || '-'} />
+                    </div>
+                  </div>
+                </Panel>
+
+                <Panel title={copy.reportComposer} icon={<FileJson size={18} />} accent="#151515">
+                  <div className="space-y-4">
+                    <p className="text-sm leading-6 text-stone-600">{copy.reportComposerHint}</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <MiniMetric label={copy.selectedDataset} value={selectedDataset?.name ?? '-'} />
+                      <MiniMetric label={copy.handoffMode} value={modeLabel(handoffContext?.plan?.mode ?? handoffContext?.handoff?.decision ?? 'full_analysis', language)} />
+                    </div>
+                    <ActionButton active={busyKind === 'analysis-plan-run'} onClick={generateReportPackage} icon={<Download size={14} />} label={copy.generateReportPackage} tone="dark" />
+                    <div className="space-y-2">
+                      <div className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{copy.latestReports}</div>
+                      {reportArtifacts.length === 0 ? <p className="text-sm text-stone-500">{copy.empty}</p> : reportArtifacts.map((artifact) => (
+                        <div key={artifact.id} className="border border-stone-300 bg-white p-3">
+                          <div className="font-mono text-[10px] uppercase text-stone-500">{artifact.artifactType}</div>
+                          <div className="mt-1 truncate font-serif text-lg">{artifact.title}</div>
+                          <div className="mt-1 text-xs text-stone-500">{formatDate(artifact.createdAt)}</div>
+                          <div className="mt-3 flex flex-wrap gap-2 border-t border-stone-200 pt-2">
+                            {artifactExportFormats(artifact).map((format) => (
+                              <button key={`${artifact.id}-${format}`} onClick={() => exportAnalyticsArtifact(artifact, format)} disabled={busyKind === `artifact-export-${artifact.id}-${format}`} className="inline-flex min-h-8 items-center gap-1 border border-stone-300 px-2 py-1 font-mono text-[10px] uppercase hover:border-[#151515] disabled:opacity-60">
+                                {busyKind === `artifact-export-${artifact.id}-${format}` ? <Activity size={11} className="animate-spin" /> : <Download size={11} />}
+                                {format}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Panel>
+              </section>
+
+              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_25rem]">
+                <WorkerResultPanel workerJob={workerJob} workerPayload={workerPayload} visualizationArtifact={visualizationArtifact} datasetOperationPayload={datasetOperationPayload} datasetOperationHistory={datasetOperationHistory} copy={copy} />
+                <Panel title={copy.chartSuggestions} icon={<BarChart3 size={18} />} accent="#B9472A">
+                  <div className="space-y-2">
+                    {suggestions.length === 0 ? <p className="text-sm text-stone-500">{copy.empty}</p> : suggestions.slice(0, 8).map((suggestion) => (
+                      <button
+                        key={suggestion.id}
+                        onClick={() => {
+                          setChartKind(suggestion.kind || 'bar');
+                          setChartX(suggestion.x ?? '');
+                          setChartY(suggestion.y ?? '');
+                          setChartColor(suggestion.color ?? '');
+                          setChartTitle(suggestion.title ?? '');
+                          renderVisualization(suggestion);
+                        }}
+                        className="w-full border border-stone-300 bg-white p-3 text-left hover:border-[#151515]"
+                      >
+                        <div className="font-mono text-[10px] uppercase text-stone-500">{suggestion.kind} / {suggestion.engine}</div>
+                        <div className="mt-1 font-serif text-lg">{suggestion.title}</div>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-stone-600">{suggestion.description}</p>
+                        <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] uppercase text-stone-500"><span>{suggestion.exportFormats.join(' / ')}</span><span className="inline-flex items-center gap-1"><Play size={12} />{copy.renderChart}</span></div>
+                      </button>
+                    ))}
+                  </div>
+                </Panel>
+              </section>
             </section>
           )}
 
@@ -1435,7 +1677,17 @@ export const DataLab: React.FC<DataLabProps> = ({ language, focus, onOpenResearc
                   </button>
                 </div>
               )}
-              <DataSourceRegistryPanel dataset={activeDataSourceDataset} datasets={dataSourceDatasets} copy={copy} materializingKey={materializingSourceKey} onSelect={(dataset) => selectDatasetSummary(dataset)} onMaterialize={materializeDataSource} onMaterializeBatch={materializeDataSources} materializeResults={materializeResults} />
+              <DataSourceRegistryPanel
+                dataset={activeDataSourceDataset}
+                datasets={dataSourceDatasets}
+                copy={copy}
+                materializingKey={materializingSourceKey}
+                onSelect={(dataset) => selectDatasetSummary(dataset)}
+                onMaterialize={materializeDataSource}
+                onMaterializeBatch={materializeDataSources}
+                onAnalyzeDataset={openDatasetInWizard}
+                materializeResults={materializeResults}
+              />
               <DatasetOperationResult payload={datasetOperationPayload} history={datasetOperationHistory} empty={copy.resultHint} labels={{ operationResult: copy.operationResult, operationHistory: copy.operationHistory, rawJson: copy.rawJson, rows: copy.rows, warnings: copy.warnings }} />
             </section>
           )}
@@ -1661,7 +1913,8 @@ const DataSourceRegistryPanel: React.FC<{
   onSelect: (dataset: AnalyticsDatasetSummary) => void;
   onMaterialize: (dataset: AnalyticsDatasetSummary, rowIndex: number) => void;
   onMaterializeBatch: (dataset: AnalyticsDatasetSummary) => void;
-}> = ({ dataset, datasets, copy, materializingKey, materializeResults, onSelect, onMaterialize, onMaterializeBatch }) => {
+  onAnalyzeDataset: (dataset: AnalyticsDatasetSummary) => void;
+}> = ({ dataset, datasets, copy, materializingKey, materializeResults, onSelect, onMaterialize, onMaterializeBatch, onAnalyzeDataset }) => {
   const [filterText, setFilterText] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
   const [formatFilter, setFormatFilter] = useState('');
@@ -1682,7 +1935,7 @@ const DataSourceRegistryPanel: React.FC<{
       quality >= minQuality
     );
   });
-  const resultByRow = new Map(materializeResults.map((item) => [item.rowIndex, item]));
+  const resultByRow = new Map<number, MaterializeResultState>(materializeResults.map((item) => [item.rowIndex, item]));
   const succeeded = materializeResults.filter((item) => item.ok).length;
   const failed = materializeResults.filter((item) => !item.ok).length;
 
@@ -1791,12 +2044,14 @@ const DataSourceRegistryPanel: React.FC<{
           </div>
 
           <div className="overflow-x-auto border border-stone-300 bg-white">
-            <table className="w-full min-w-[76rem] text-left text-xs">
+            <table className="w-full min-w-[92rem] text-left text-xs">
               <thead>
                 <tr className="bg-stone-100 font-mono text-[10px] uppercase text-stone-500">
                   <th className="border-b border-stone-300 px-3 py-2">{copy.source}</th>
                   <th className="border-b border-stone-300 px-3 py-2">URL</th>
                   <th className="border-b border-stone-300 px-3 py-2">{copy.providerType}</th>
+                  <th className="border-b border-stone-300 px-3 py-2">{copy.sourceAnalysisHints}</th>
+                  <th className="border-b border-stone-300 px-3 py-2">{copy.sourceAnalysisNextStep}</th>
                   <th className="border-b border-stone-300 px-3 py-2">{copy.accessMode}</th>
                   <th className="border-b border-stone-300 px-3 py-2">{copy.formatHint}</th>
                   <th className="border-b border-stone-300 px-3 py-2">{copy.licenseHint}</th>
@@ -1823,6 +2078,13 @@ const DataSourceRegistryPanel: React.FC<{
                       </a>
                     </td>
                     <td className="border-b border-stone-200 px-3 py-2 align-top font-mono">{String(row.provider ?? '-')} / {String(row.provider_type ?? '-')}</td>
+                    <td className="border-b border-stone-200 px-3 py-2 align-top">
+                      <div className="flex max-w-48 flex-wrap gap-1">
+                        {normalizeRowStringArray(row.analysis_field_hints).slice(0, 5).map((hint) => <span key={hint} className="border border-stone-300 bg-stone-50 px-1.5 py-0.5 font-mono text-[10px]">{hint}</span>)}
+                        {normalizeRowStringArray(row.analysis_field_hints).length === 0 && <span className="text-stone-400">-</span>}
+                      </div>
+                    </td>
+                    <td className="border-b border-stone-200 px-3 py-2 align-top">{String(row.analysis_next_step ?? '-')}</td>
                     <td className="border-b border-stone-200 px-3 py-2 align-top">{String(row.access_mode ?? '-')}</td>
                     <td className="border-b border-stone-200 px-3 py-2 align-top">{String(row.format_hint ?? '-')}</td>
                     <td className="border-b border-stone-200 px-3 py-2 align-top">{String(row.license_hint ?? '-')}</td>
@@ -1834,6 +2096,15 @@ const DataSourceRegistryPanel: React.FC<{
                     <td className="border-b border-stone-200 px-3 py-2 align-top font-mono">{formatPriority(row.priority_score)}</td>
                     <td className="border-b border-stone-200 px-3 py-2 align-top">
                       <MaterializeStatusBadge status={status} copy={copy} />
+                      {status?.ok && status.datasetId && (
+                        <button
+                          onClick={() => onAnalyzeDataset(materializedDatasetFromStatus(status))}
+                          className="mt-2 inline-flex min-h-7 items-center gap-1 border border-[#6C4AB6] bg-white px-2 py-1 font-mono text-[10px] uppercase text-[#6C4AB6] hover:bg-[#F0ECFF]"
+                        >
+                          <Sparkles size={11} />
+                          {copy.openWizardWithDataset}
+                        </button>
+                      )}
                     </td>
                     <td className="border-b border-stone-200 px-3 py-2 align-top">
                       <button
@@ -2052,6 +2323,22 @@ const DetailList: React.FC<{ title: string; items: string[]; emptyLabel?: string
       <div className="text-xs text-stone-500">{emptyLabel}</div>
     )}
   </div>
+);
+
+const FieldSelect: React.FC<{
+  label: string;
+  value: string;
+  fields: Array<{ name: string; type: string }>;
+  onChange: (value: string) => void;
+  optional?: boolean;
+}> = ({ label, value, fields, onChange, optional }) => (
+  <label className="space-y-1">
+    <span className="font-mono text-[10px] uppercase tracking-wider text-stone-500">{label}</span>
+    <select value={value} onChange={(event) => onChange(event.target.value)} className="w-full border-2 border-stone-300 bg-white px-3 py-2 text-xs outline-none focus:border-[#151515]">
+      {optional && <option value="">-</option>}
+      {fields.map((field) => <option key={field.name} value={field.name}>{field.name} / {field.type}</option>)}
+    </select>
+  </label>
 );
 
 function modeLabel(mode: string, language: Language) {
@@ -2642,8 +2929,50 @@ function uniqueRowValueCount(rows: Array<Record<string, unknown>>, field: string
   return new Set(rows.map((row) => String(row[field] ?? '')).filter(Boolean)).size;
 }
 
+function normalizeRowStringArray(value: unknown) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value === 'string') {
+    return value.split(/[|,，、]/).map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function materializedDatasetFromStatus(status: MaterializeResultState): AnalyticsDatasetSummary {
+  return {
+    id: status.datasetId ?? '',
+    name: status.datasetName ?? status.datasetId ?? 'Materialized dataset',
+    sourceKind: 'materialized-data-source',
+    rowCount: status.rows ?? 0,
+    columnCount: 0,
+    sampleRows: [],
+    metadata: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function uniqueStrings(values: string[]) {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function inferFieldOptionsFromRows(rows: Array<Record<string, unknown>>) {
+  const firstRow = rows.find(isRecord);
+  if (!firstRow) return [];
+  return Object.keys(firstRow).map((name) => ({
+    name,
+    type: inferValueType(firstRow[name]),
+  }));
+}
+
+function inferValueType(value: unknown) {
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'string') {
+    if (value.trim() && Number.isFinite(Number(value))) return 'number';
+    if (!Number.isNaN(Date.parse(value))) return 'date';
+    return 'string';
+  }
+  return 'string';
 }
 
 function formatPriority(value: unknown) {

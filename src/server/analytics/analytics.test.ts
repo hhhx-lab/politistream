@@ -4,6 +4,7 @@ import { computeDescriptiveStatistics, getAnalyticsCapabilities, profileRows, su
 import { buildAnalyticsWorkerCommand } from "./workerRunner";
 import { renderVisualizationArtifact } from "./visualization";
 import { normalizeAnalysisKind, workerCommandForKind } from "./jobs";
+import { allowedAnalysisKindsForMode } from "./planRunner";
 import { resolveAnalyticsArtifactFile } from "./routes";
 import { buildResearchDataSourceRows, scoreDataSourceQuality } from "./researchDataSources";
 import { inferMaterializeKind, selectDataSourceRow, selectDataSourceRows, sourceRowFromMaterializedDataset, validateMaterializeUrl } from "./sourceMaterializer";
@@ -150,12 +151,16 @@ function testAnalyticsHandoffPlanningRoutesAreWired() {
 
 function testLightweightHandoffRestrictionsAreEnforced() {
   const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  const planRunnerSource = readFileSync(new URL("./planRunner.ts", import.meta.url), "utf8");
   const researchRoutesSource = readFileSync(new URL("../research/routes.ts", import.meta.url), "utf8");
 
   assert.ok(routesSource.includes("analysis_mode_restricts_kind"), "Analytics analyze route should reject restricted jobs by mode");
-  assert.ok(routesSource.includes('if (mode === "light_analysis")'), "Analytics route should have an explicit lightweight allow-list");
-  assert.ok(routesSource.includes('"linear-regression"'), "Full mode should still list regression as an allowed kind");
+  assert.ok(planRunnerSource.includes('if (mode === "light_analysis")'), "Analytics plan runner should have an explicit lightweight allow-list");
+  assert.ok(planRunnerSource.includes('"linear-regression"'), "Full mode should still list regression as an allowed kind");
   assert.ok(researchRoutesSource.includes("analysisHandoffDecision: input.decision"), "Research-created source registry metadata should preserve the selected handoff mode");
+  assert.deepEqual(allowedAnalysisKindsForMode("report_only"), []);
+  assert.ok(!allowedAnalysisKindsForMode("light_analysis").includes("linear-regression"), "light mode should not allow regression");
+  assert.ok(allowedAnalysisKindsForMode("full_analysis").includes("export-report"), "full mode should allow report export");
 }
 
 function testHandoffLineageIsPreservedOnPlansJobsAndArtifacts() {
@@ -451,6 +456,17 @@ function testDataLabSurfacesAdvancedTools() {
   assert.ok(smokeSource.includes("数据源快照已刷新"), "Playwright smoke should assert materialized source refresh feedback");
   assert.ok(smokeSource.includes("数据源快照已导入"), "Playwright smoke should assert data source materialization feedback");
   assert.ok(source.includes("/api/analytics/handoffs/research-run/${runId}"), "Data Lab should load Research handoff context by run id");
+  assert.ok(source.includes("/api/analytics/datasets/${datasetId}/run-plan"), "Data Lab should call the server-side analysis plan runner");
+  assert.ok(source.includes("runAnalysisPlan"), "Data Lab should wire a real full-analysis pipeline action");
+  assert.ok(source.includes("完整分析流水线结果"), "Data Lab should label full pipeline results");
+  assert.ok(source.includes("图表工作台"), "Data Lab should expose a productized Chart Studio");
+  assert.ok(source.includes("renderChartStudioVisualization"), "Data Lab should wire custom chart rendering");
+  assert.ok(source.includes("批量生成推荐图表"), "Data Lab should expose batch recommended chart rendering");
+  assert.ok(source.includes("报告生成器"), "Data Lab should expose a productized Report Composer");
+  assert.ok(source.includes("generateReportPackage"), "Data Lab should wire report package generation");
+  assert.ok(source.includes("用该数据集分析"), "Data Lab should let materialized data sources jump into the analysis wizard");
+  assert.ok(source.includes("可分析字段线索"), "Data Lab should show analysis field hints on source rows");
+  assert.ok(source.includes("analysis_field_hints"), "Data Lab should read source-row analysis field hints");
   assert.ok(source.includes("Research 分析交接"), "Data Lab should render the handoff context panel");
   assert.ok(source.includes("handoffContext"), "Data Lab should store focused handoff context");
   assert.ok(source.includes("handoffQuestions"), "Data Lab should surface planned analysis questions");
@@ -465,6 +481,8 @@ function testDataLabSurfacesAdvancedTools() {
   assert.ok(wizardSource.includes("recommendedCharts"), "Data Lab wizard should show recommended charts from the backend plan");
   assert.ok(wizardSource.includes("fieldCoverage"), "Data Lab wizard should show field coverage from the backend plan");
   assert.ok(wizardSource.includes("uniqueAnalyticsJobKinds"), "Data Lab wizard should restrict its default run chain to allowed plan methods when present");
+  assert.ok(wizardSource.includes("onRunPlan"), "Data Lab wizard should call the server-side analysis plan runner for full flow");
+  assert.ok(wizardSource.includes("analysis-plan-run"), "Data Lab wizard should expose a loading state for the full pipeline");
 }
 
 function testResearchDataSourceRows() {
@@ -560,6 +578,8 @@ function testResearchDataSourceRows() {
   assert.equal(rows[0].materialize_readiness, "ready");
   assert.equal(rows[0].dataset_quality_tier, "A");
   assert.ok(Number(rows[0].source_quality_score) > 0.85);
+  assert.ok(Array.isArray(rows[0].analysis_field_hints), "data source rows should include analysis field hints");
+  assert.equal(rows[0].analysis_next_step, "materialize_then_profile");
   assert.ok(String(rows[0].quality_reason).includes("provider:data-catalog"));
   assert.ok(String(rows[0].lineage_json).includes("frontier-data"));
   assert.equal(rows[1].provider_type, "structured-api");

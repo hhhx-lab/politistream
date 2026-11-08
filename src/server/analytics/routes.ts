@@ -29,9 +29,10 @@ import { extractPdfDocument } from "../research/extractors/pdfExtractor";
 import { inspectStructuredBuffer } from "../research/extractors/structuredInspector";
 import { normalizeAnalysisKind, renderDatasetVisualization, runDatasetAnalysis } from "./jobs";
 import { buildTopicAnalysisPlan } from "./planner";
+import { allowedAnalysisKindsForMode, isAnalysisKindAllowedForPlanMode, runTopicAnalysisPlan } from "./planRunner";
 import { DataSourceFetcher, materializeResearchDataSource, materializeResearchDataSources, refreshMaterializedDataSource } from "./sourceMaterializer";
 import { researchDocumentsToNewsRows } from "./newsAnalysis";
-import type { AnalyticsDatasetAsset, VisualizationSuggestion } from "./types";
+import type { AnalyticsDatasetAsset, TopicAnalysisPlan, VisualizationSuggestion } from "./types";
 import type { AnalysisOpportunity, AnalysisOpportunityMode, CrawlDocument, DiscoveryResult, ExtractedTable, ExtractorKind, FrontierItem, SearchCandidate } from "../research/types";
 
 export interface AnalyticsRouterDependencies {
@@ -353,6 +354,40 @@ export function createAnalyticsRouter(dependencies: AnalyticsRouterDependencies 
         });
       }
       const result = await runDatasetAnalysis(req.params.id, kind, analysisContextFromDataset(dataset, mode, req.body));
+      res.status(201).json(result);
+    } catch (error) {
+      sendAnalyticsError(res, error);
+    }
+  });
+
+  router.post("/datasets/:id/run-plan", async (req, res) => {
+    try {
+      const dataset = await getAnalyticsDataset(req.params.id);
+      if (!dataset) return res.status(404).json({ error: "analytics_dataset_not_found" });
+      const profileRecord = await getLatestDatasetProfile(dataset.id) ?? await createDatasetProfile(dataset.id);
+      const requestedMode = normalizePlanMode(req.body.mode)
+        ?? normalizePlanMode(dataset.metadata?.analysisHandoffDecision)
+        ?? normalizePlanMode(dataset.metadata?.recommendedAnalysisMode)
+        ?? "full_analysis";
+      const plan = await resolveRunPlanForDataset({
+        dataset,
+        body: isRecord(req.body) ? req.body : {},
+        profile: profileRecord.profile,
+        mode: requestedMode,
+      });
+      const result = await runTopicAnalysisPlan({
+        datasetId: dataset.id,
+        plan,
+        mode: plan.mode,
+        requestedKinds: Array.isArray(req.body.kinds) ? req.body.kinds : undefined,
+        chartLimit: Number.isFinite(Number(req.body.chartLimit)) ? Number(req.body.chartLimit) : undefined,
+        includeCharts: req.body.includeCharts !== false,
+        includeReport: req.body.includeReport !== false,
+        context: analysisContextFromDataset(dataset, plan.mode, {
+          ...req.body,
+          planId: plan.id,
+        }),
+      });
       res.status(201).json(result);
     } catch (error) {
       sendAnalyticsError(res, error);
@@ -925,45 +960,6 @@ function normalizePlanMode(value: unknown): AnalysisOpportunityMode | null {
     : null;
 }
 
-function allowedAnalysisKindsForMode(mode: AnalysisOpportunityMode) {
-  if (mode === "report_only" || mode === "continue_crawl") {
-    return [];
-  }
-  if (mode === "light_analysis") {
-    return ["profile", "descriptive-statistics", "quality-report", "frequency-tables", "crosstab", "visualization-render"];
-  }
-  return [
-    "profile",
-    "descriptive-statistics",
-    "quality-report",
-    "frequency-tables",
-    "crosstab",
-    "statistical-tests",
-    "linear-regression",
-    "logistic-regression",
-    "poisson-regression",
-    "dimensionality-reduction",
-    "cluster-analysis",
-    "anomaly-detection",
-    "time-series-analysis",
-    "data-transformation",
-    "data-cleaning",
-    "news-organization",
-    "text-analysis",
-    "model-explanation",
-    "deep-learning-analysis",
-    "geospatial-analysis",
-    "publication-chart",
-    "report-draft",
-    "export-report",
-    "visualization-render",
-  ];
-}
-
-function isAnalysisKindAllowedForPlanMode(kind: string, mode: AnalysisOpportunityMode) {
-  return allowedAnalysisKindsForMode(mode).includes(kind);
-}
-
 function analysisContextFromDataset(dataset: AnalyticsDatasetAsset, mode: AnalysisOpportunityMode | null, body: Record<string, unknown> = {}) {
   const lineage = isRecord(dataset.metadata?.lineage) ? dataset.metadata.lineage : {};
   return {
@@ -983,6 +979,72 @@ function analysisContextFromDataset(dataset: AnalyticsDatasetAsset, mode: Analys
       ?? (dataset.sourceKind === "research-data-source" ? dataset.id : undefined),
     ),
   };
+}
+
+async function resolveRunPlanForDataset(input: {
+  dataset: AnalyticsDatasetAsset;
+  body: Record<string, unknown>;
+  profile: ReturnType<typeof profileRows>;
+  mode: AnalysisOpportunityMode;
+}): Promise<TopicAnalysisPlan> {
+  if (isTopicAnalysisPlan(input.body.plan)) {
+    return {
+      ...input.body.plan,
+      mode: normalizePlanMode(input.body.mode) ?? input.body.plan.mode ?? input.mode,
+      lineage: {
+        ...input.body.plan.lineage,
+        datasetId: input.dataset.id,
+      },
+    };
+  }
+
+  const runId = stringOrUndefined(
+    input.body.runId
+    ?? input.body.researchRunId
+    ?? input.dataset.metadata?.runId
+    ?? (isRecord(input.dataset.metadata?.lineage) ? input.dataset.metadata.lineage.runId : undefined)
+    ?? (input.dataset.sourceKind === "research-data-source" ? input.dataset.sourceRef : undefined),
+  );
+  if (runId) {
+    await initResearchSchema();
+    const opportunity = await getAnalysisOpportunityForRun(runId);
+    if (opportunity) {
+      const handoff = await getAnalysisHandoffForRun(runId);
+      return buildTopicAnalysisPlan({
+        opportunity,
+        handoff: handoff ?? undefined,
+        datasetId: input.dataset.id,
+        sourceRegistryDatasetId: input.dataset.sourceKind === "research-data-source" ? input.dataset.id : stringOrUndefined(input.dataset.metadata?.materializedFromDatasetId),
+        datasetProfile: input.profile,
+        sourceRows: input.dataset.sampleRows,
+        mode: normalizePlanMode(input.body.mode) ?? handoff?.decision ?? opportunity.recommendedAnalysisMode,
+        allowedOperations: Array.isArray(input.body.allowedOperations) ? input.body.allowedOperations.map(String) : handoff?.allowedOperations,
+      });
+    }
+  }
+
+  const topic = String(input.body.topic ?? input.dataset.metadata?.topic ?? input.dataset.name ?? "Data Lab 分析").trim();
+  const opportunity = syntheticOpportunityFromTopic({
+    topic,
+    mode: input.mode,
+    profile: input.profile,
+  });
+  return buildTopicAnalysisPlan({
+    opportunity,
+    datasetId: input.dataset.id,
+    datasetProfile: input.profile,
+    sourceRows: input.dataset.sampleRows,
+    mode: input.mode,
+  });
+}
+
+function isTopicAnalysisPlan(value: unknown): value is TopicAnalysisPlan {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.topic === "string"
+    && Array.isArray(value.recommendedMethods)
+    && Array.isArray(value.recommendedCharts)
+    && isRecord(value.lineage);
 }
 
 function stringOrUndefined(value: unknown) {

@@ -206,9 +206,12 @@ export function scoreDataSourceQuality(row: Record<string, unknown>) {
 }
 
 function withQualityFields(row: Record<string, unknown>) {
+  const quality = scoreDataSourceQuality(row);
   return {
     ...row,
-    ...scoreDataSourceQuality(row),
+    ...quality,
+    analysis_field_hints: inferAnalysisFieldHints(row),
+    analysis_next_step: analysisNextStep(quality.materialize_readiness, inferAnalysisFieldHints(row)),
   };
 }
 
@@ -241,6 +244,53 @@ function inferDataSourceType(url: string, provider: string) {
   if (value.includes("sports")) return "sports-data";
   if (value.includes("openml") || value.includes("huggingface.co/datasets")) return "dataset";
   return "unknown";
+}
+
+function inferAnalysisFieldHints(row: Record<string, unknown>) {
+  const value = [
+    row.title,
+    row.url,
+    row.snippet,
+    row.query,
+    row.source_type,
+    row.provider_type,
+  ].map((item) => String(item ?? "").toLowerCase()).join(" ");
+  const hints = new Set<string>();
+  if (/(region|province|city|country|state|geo|area|地区|省|城市|国家|区域)/.test(value)) {
+    hints.add("region");
+  }
+  if (/(date|time|year|month|quarter|timeline|时间|日期|年份|月份|季度|趋势)/.test(value)) {
+    hints.add("time");
+  }
+  if (/(sales|revenue|income|amount|volume|price|market|营收|收入|销售|销量|价格|市场|份额|购买)/.test(value)) {
+    hints.add("metric");
+  }
+  if (/(brand|company|manufacturer|channel|category|segment|品牌|公司|厂商|渠道|类别|人群)/.test(value)) {
+    hints.add("dimension");
+  }
+  if (/(population|consumer|user|demographic|age|gender|人群|用户|消费者|人口|年龄|性别)/.test(value)) {
+    hints.add("audience");
+  }
+  if (/(score|rating|review|rank|评价|评分|排名)/.test(value)) {
+    hints.add("rating");
+  }
+  if (/(lat|lon|lng|map|geojson|坐标|经纬度|地图)/.test(value)) {
+    hints.add("geography");
+  }
+  if (hints.size === 0) {
+    const sourceType = String(row.source_type ?? row.provider_type ?? "");
+    if (sourceType.includes("sports")) hints.add("sports_metric");
+    if (sourceType.includes("financial")) hints.add("financial_metric");
+    if (sourceType.includes("structured") || sourceType.includes("data")) hints.add("structured_fields");
+  }
+  return [...hints];
+}
+
+function analysisNextStep(materializeReadiness: string, hints: string[]) {
+  if (materializeReadiness === "ready" && hints.length > 0) return "materialize_then_profile";
+  if (materializeReadiness === "ready") return "materialize_then_inspect_fields";
+  if (materializeReadiness === "platform-auth") return "open_platform_or_add_credentials";
+  return "review_source_before_analysis";
 }
 
 function inferAccessMode(url: string, providerType: string) {

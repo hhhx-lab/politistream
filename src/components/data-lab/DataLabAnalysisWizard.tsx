@@ -71,6 +71,7 @@ interface DataLabAnalysisWizardProps {
   handoffContext?: DataLabHandoffContextSummary | null;
   busyKind: string;
   onRunAnalysis: (kind: AnalyticsJobKindSummary) => void;
+  onRunPlan: (input: { kinds: AnalyticsJobKindSummary[]; includeCharts: boolean; includeReport: boolean }) => void;
   onRenderVisualization: (suggestion?: VisualizationSuggestionSummary) => void;
 }
 
@@ -135,6 +136,7 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
   handoffContext,
   busyKind,
   onRunAnalysis,
+  onRunPlan,
   onRenderVisualization,
 }) => {
   const templates = useMemo(() => buildWizardTemplates(language), [language]);
@@ -168,14 +170,12 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
   });
   const primaryKind = recommended[0] ?? selectedTemplate.primary;
 
-  const runChain = async () => {
-    for (const kind of recommended) {
-      onRunAnalysis(kind);
-      await new Promise((resolve) => window.setTimeout(resolve, 80));
-    }
-    if (selectedTemplate.outputs.includes('chart')) {
-      onRenderVisualization(selectedSuggestion);
-    }
+  const runChain = () => {
+    onRunPlan({
+      kinds: recommended,
+      includeCharts: selectedTemplate.outputs.includes('chart'),
+      includeReport: selectedTemplate.outputs.includes('report'),
+    });
   };
 
   return (
@@ -248,7 +248,7 @@ export const DataLabAnalysisWizard: React.FC<DataLabAnalysisWizardProps> = ({
                     disabled={!dataset || busyKind !== ''}
                     className="inline-flex min-h-10 items-center justify-center gap-2 border-2 border-[#151515] bg-white px-3 py-2 font-mono text-[10px] uppercase disabled:opacity-50"
                   >
-                    {busyKind ? <Activity size={13} className="animate-spin" /> : <GitBranch size={13} />}
+                    {busyKind === 'analysis-plan-run' ? <Activity size={13} className="animate-spin" /> : <GitBranch size={13} />}
                     {copy.wizardRunAll}
                   </button>
                 </div>
