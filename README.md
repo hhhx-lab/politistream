@@ -1,6 +1,6 @@
-# PolitiStream
-
 <div align="center">
+
+# PolitiStream
 
 **A deep-research command center for web evidence, RSS intelligence, source exploration, and data analysis.**
 
@@ -16,7 +16,7 @@
 
 > PolitiStream turns a research question into a visible operating loop: planned searches, discovered sources, prioritized crawling, extracted evidence, source quality signals, and analysis-ready datasets.
 
-PolitiStream is not just an RSS reader and not just a search box. It is a local-first research workbench built with React, Express, Postgres, Redis/BullMQ, SQLite, and a Python analytics lane. It is designed for users who need to investigate topics, trace news, inspect sources, collect data assets, and convert messy web material into structured evidence and charts.
+PolitiStream is a local-first research workbench built with React, Express, Postgres, Redis/BullMQ, SQLite, and a Python analytics lane. It is designed for users who need to investigate topics, trace news, inspect sources, collect data assets, and convert messy web material into structured evidence and charts.
 
 The current project is best classified as a **web application** with two strong secondary identities: **agent system** and **data analytics project**.
 
@@ -97,9 +97,27 @@ Simplified Chinese report + Source Explorer + Data Lab export
 | Saved Library | Keep important news items |
 | AI Work Queue | Process news items that still need AI summaries |
 
-The Research provider panel also exposes data source coverage (数据源覆盖), so data-catalog, structured-api, competition-data, and sports-data candidates are not hidden behind a generic provider count. The Frontier view includes Frontier 评分解释 with fixed scoring weights: 主题相关度 25%, source authority 25%, original-source probability 20%, freshness 10%, source diversity 10%, and link-context quality 10%.
+The provider panel exposes data-source coverage for data catalogs, structured APIs, competition data, and sports data. The Frontier view explains its scoring weights: topic relevance 25%, source authority 25%, original-source probability 20%, freshness 10%, source diversity 10%, and link-context quality 10%.
+
+## Current Data Lab Updates
+
+- Topic analysis plans can execute allowed methods, recommended charts, and report exports through `POST /api/analytics/datasets/:id/run-plan`.
+- The plan runner returns per-method and per-chart results, failure details, and an artifact summary.
+- Analysis modes control execution: light analysis limits methods; full analysis enables broader methods; report-only and continue-crawl modes do not execute analysis methods.
+- Research data-source rows include inferred field hints and suggested next steps for materialization and analysis.
+- Crawler diagnostics retain extractor metadata, and search calls can select a subset of configured providers.
 
 ## Quick Start
+
+Clone the source first:
+
+```bash
+git clone --branch main git@github.com:hhhx-lab/politistream.git
+cd politistream
+```
+
+Requirements: Node.js/npm, Docker or OrbStack for research infrastructure, and uv with Python 3.12 for the analytics worker.
+
 
 ```bash
 npm install
@@ -258,6 +276,7 @@ Key endpoints:
 | `POST` | `/api/analytics/datasets/from-research-run/:runId/data-sources` | Export research data-source candidates to Data Lab |
 | `POST` | `/api/analytics/datasets/:id/materialize-source` | Fetch one data source into a dataset |
 | `POST` | `/api/analytics/datasets/:id/analyze` | Run a Data Lab analysis job |
+| `POST` | `/api/analytics/datasets/:id/run-plan` | Execute an allowed topic-analysis sequence and recommended charts |
 | `POST` | `/api/analytics/visualizations/render` | Create a visualization artifact |
 | `GET` | `/api/feeds` | List RSS sources |
 | `POST` | `/api/feeds` | Add an RSS source |
@@ -323,6 +342,12 @@ npm run check:postgres         # Validate Postgres config and schema
 npm run benchmark:research     # Offline research benchmark
 ```
 
+## Deployment Modes
+
+The local server supports research workers, analytics, agents, and RSS. `vercel.json` routes API requests to `api/handler.ts`, which uses the smaller `serverless.ts` entry point.
+
+The Vercel entry is an RSS demonstration: research, analytics, agent execution, and AI refresh endpoints return HTTP 503 because they require a persistent worker runtime. Its SQLite file lives in temporary function storage and is not durable across function instances. Use persistent Postgres, Redis, worker processes, and artifact storage for the full application.
+
 ## Outputs
 
 PolitiStream can produce:
@@ -363,7 +388,7 @@ npm run test
 | Source Explorer has no documents | The run may not have reached fetch/extract, or frontier items may have failed |
 | Evidence graph is sparse | The run needs extracted document text and a successful analyze/report stage |
 
-## Runtime Monitoring (运行监控)
+## Runtime Monitoring
 
 The Research workspace includes a run monitoring surface that shows:
 
@@ -372,7 +397,7 @@ The Research workspace includes a run monitoring surface that shows:
 - provider calls and errors;
 - frontier state and scoring;
 - document fetch status;
-- reading path (读取路径) and diagnostics;
+- reading path and diagnostics;
 - evidence graph and claim coverage;
 - final report readiness.
 
@@ -400,7 +425,7 @@ The crawler is designed to respect robots.txt, rate limits, retries, and budget 
 - Discovery can still take time in Deep mode because provider latency and rate limits are real.
 - RSS batch refresh is intentionally conservative about full-text fetching to keep initial refresh fast.
 - Single-news analysis still uses a table scan path that should be replaced by `getNewsById()` as data volume grows.
-- `news.db` currently exists in the repository history; runtime database files should eventually move out of version control.
+- SQLite databases, WAL files, caches, and generated research artifacts are excluded from the current source tree. Historical commits may still contain older runtime files.
 - The UI exposes many advanced capabilities, but serious verification still requires reading run events, source diagnostics, and evidence links.
 
 ## Reading Path
@@ -419,3 +444,14 @@ Star this repo if you want a local research cockpit that keeps search, crawling,
 ## License
 
 This repository does not currently include a `LICENSE` file. Add one before publishing it as an open-source project.
+
+## Restore a Local Checkout
+
+Clone the current `main` branch through SSH:
+
+```bash
+git clone --branch main git@github.com:hhhx-lab/politistream.git
+cd politistream
+```
+
+Restore your saved environment files to their original relative paths before starting the application. Use the quick-start commands to recreate project dependencies. Git contains source code and configuration templates; local credentials, caches, uploads, and generated runtime state are kept separately.
