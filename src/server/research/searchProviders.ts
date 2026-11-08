@@ -25,6 +25,10 @@ export interface SearchProviderResult {
   error?: string;
 }
 
+export interface SearchProviderSelection {
+  providers?: ProviderName[];
+}
+
 const braveProvider: ProviderAdapter = {
   name: "brave",
   enabled: (config) => Boolean(config.braveApiKey),
@@ -107,10 +111,15 @@ export const SEARCH_PROVIDERS: ProviderAdapter[] = [braveProvider, serpApiProvid
 export async function searchConfiguredProviders(
   input: ProviderSearchInput,
   config = getResearchConfig(),
+  selection: SearchProviderSelection = {},
 ): Promise<SearchProviderResult[]> {
   const results: SearchProviderResult[] = [];
+  const requestedProviders = selection.providers?.length
+    ? new Set(selection.providers)
+    : null;
 
   for (const provider of SEARCH_PROVIDERS) {
+    if (requestedProviders && !requestedProviders.has(provider.name)) continue;
     if (!provider.enabled(config)) {
       results.push({ provider: provider.name, enabled: false, candidates: [], error: "provider_api_key_missing" });
       continue;

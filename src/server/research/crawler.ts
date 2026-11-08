@@ -91,7 +91,7 @@ export async function crawlPublicPage(candidate: SearchCandidate): Promise<Crawl
               `${enhanced.provider}_provider`,
               enhanced.document.contentText ? "content_extracted" : "empty_content",
             ],
-          }),
+          }, enhanced.document.metadata),
         },
         documentLinks,
         discoveredLinks: documentLinks.map((link) => link.url),
@@ -153,7 +153,7 @@ export async function crawlPublicPage(candidate: SearchCandidate): Promise<Crawl
             fallbackUsed ? `fallback_from:${initialResponse.fetcher}` : "fallback_not_used",
             contentText ? "content_extracted" : "empty_content",
           ],
-        }),
+        }, extracted.metadata),
       },
       documentLinks,
       discoveredLinks: documentLinks.map((link) => link.url),
@@ -207,8 +207,9 @@ function fetchDiagnosticsMetadata(input: {
   extractor?: ExtractorKind;
   fallbackUsed?: boolean;
   diagnostics?: string[];
-}) {
+}, extractedMetadata: Record<string, unknown> = {}) {
   return {
+    ...extractedMetadata,
     readerPath: input.readerPath,
     fetcher: input.response.fetcher,
     contentType: input.response.contentType,
