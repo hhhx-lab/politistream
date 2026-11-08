@@ -5,8 +5,6 @@ coverage/
 tmp/
 .DS_Store
 *.log
-.env*
-!.env.example
 .data/
 archives/
 news.db
@@ -15,3 +13,12 @@ news.db-wal
 workers-analytics/.venv/
 workers-analytics/**/__pycache__/
 .vercel
+
+# Local agent state, browser diagnostics, and credentials.
+.codex/
+.playwright-cli/
+.playwright-mcp/
+.env*
+!.env.example
+!.env.*.example
+*.env
